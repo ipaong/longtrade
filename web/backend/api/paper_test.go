@@ -60,11 +60,11 @@ func TestPaperAccountAndReset(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&snapshot); err != nil {
 		t.Fatalf("failed to decode account snapshot: %v", err)
 	}
-	if snapshot.Balance != 10000.0 {
-		t.Errorf("balance = %f; want 10000.0", snapshot.Balance)
+	if snapshot.Account.Balance != 10000.0 {
+		t.Errorf("balance = %f; want 10000.0", snapshot.Account.Balance)
 	}
-	if snapshot.Currency != "USD" {
-		t.Errorf("currency = %q; want 'USD'", snapshot.Currency)
+	if snapshot.Account.Currency != "USD" {
+		t.Errorf("currency = %q; want 'USD'", snapshot.Account.Currency)
 	}
 
 	// POST /api/paper/account/reset
