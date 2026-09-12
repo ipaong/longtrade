@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const testAccountID = "paper-main"
+const testAccountID = DefaultAccountID
 
 func newTestStore(t *testing.T) (*Store, string) {
 	t.Helper()
@@ -292,8 +292,10 @@ func TestStoreTransactionRollsBack(t *testing.T) {
 	ctx := context.Background()
 	wantErr := errors.New("stop transaction")
 
+	account := testAccount()
+	account.ID = "rollback-account"
 	err := store.WithTx(ctx, func(tx *Tx) error {
-		if err := tx.SaveAccount(ctx, testAccount()); err != nil {
+		if err := tx.SaveAccount(ctx, account); err != nil {
 			return err
 		}
 		return wantErr
@@ -302,7 +304,7 @@ func TestStoreTransactionRollsBack(t *testing.T) {
 		t.Fatalf("WithTx() error = %v, want %v", err, wantErr)
 	}
 
-	if _, err := store.GetAccount(ctx, testAccountID); !errors.Is(err, ErrNotFound) {
+	if _, err := store.GetAccount(ctx, account.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("GetAccount() error = %v, want ErrNotFound", err)
 	}
 }

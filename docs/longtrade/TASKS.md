@@ -22,13 +22,13 @@
 |---|---|---|---|---|
 | LT-101 | DONE | กำหนด paper account, position, order และ trade types | LT-000 | Types รองรับ XAUUSD, lot, side, SL/TP, P/L และมี validation tests |
 | LT-102 | DONE | สร้าง SQLite paper store และ migrations | LT-101 | บันทึก account/positions/orders/trades, เปิดใหม่ข้อมูลไม่หาย และ tests ผ่าน |
-| LT-103 | READY | สร้างบัญชีเริ่มต้นและคำสั่ง reset | LT-102 | บัญชีใหม่มี 10,000 USD, reset ทำงานแบบ atomic และมี tests |
-| LT-104 | READY | สร้าง quote source interface และ fake quote | LT-101 | Engine รับราคาแบบ inject ได้, ตรวจ stale quote และทดสอบโดยไม่ใช้ network |
-| LT-105 | WAITING | เปิด simulated market position | LT-102, LT-104 | ตรวจ lot/balance/risk, บันทึก order กับ position ครั้งเดียว และมี idempotency test |
-| LT-106 | WAITING | คำนวณ Equity และ unrealized P/L | LT-105 | BUY/SELL คำนวณถูกต้องจาก bid/ask และ snapshot มี timestamp |
-| LT-107 | WAITING | ปิด position และบันทึก realized P/L | LT-106 | ปิดเต็มจำนวนได้, balance เปลี่ยนถูกต้อง และ trade history ตรวจสอบย้อนกลับได้ |
-| LT-108 | WAITING | เพิ่มและแก้ Stop Loss / Take Profit | LT-105 | validate ระดับราคา, บันทึกค่า และ trigger ปิด position ได้แบบ deterministic |
-| LT-109 | WAITING | Emergency close และ paper risk limits | LT-107, LT-108 | ปิดเฉพาะ position ที่มี, ป้องกัน order ซ้ำ และบันทึก audit event |
+| LT-103 | DONE | สร้างบัญชีเริ่มต้นและคำสั่ง reset | LT-102 | บัญชีใหม่มี 10,000 USD, reset ทำงานแบบ atomic และมี tests |
+| LT-104 | DONE | สร้าง quote source interface และ fake quote | LT-101 | Engine รับราคาแบบ inject ได้, ตรวจ stale quote และทดสอบโดยไม่ใช้ network |
+| LT-105 | DONE | เปิด simulated market position | LT-102, LT-104 | ตรวจ lot/balance/risk, บันทึก order กับ position ครั้งเดียว และมี idempotency test |
+| LT-106 | DONE | คำนวณ Equity และ unrealized P/L | LT-105 | BUY/SELL คำนวณถูกต้องจาก bid/ask และ snapshot มี timestamp |
+| LT-107 | DONE | ปิด position และบันทึก realized P/L | LT-106 | ปิดเต็มจำนวนได้, balance เปลี่ยนถูกต้อง และ trade history ตรวจสอบย้อนกลับได้ |
+| LT-108 | DONE | เพิ่มและแก้ Stop Loss / Take Profit | LT-105 | validate ระดับราคา, บันทึกค่า และ trigger ปิด position ได้แบบ deterministic |
+| LT-109 | DONE | Emergency close และ paper risk limits | LT-107, LT-108 | ปิดเฉพาะ position ที่มี, ป้องกัน order ซ้ำ และบันทึก audit event |
 
 ## Phase 2: Backend API
 
@@ -70,5 +70,5 @@
 
 ## ลำดับที่แนะนำตอนนี้
 
-ทำ `LT-103` เพื่อสร้างบัญชี Demo เริ่มต้นและคำสั่ง reset แล้วทำ `LT-104` สำหรับแหล่งราคา
-หรือทำ `LT-001` ก่อน หากต้องการตรวจเส้นทางความปลอดภัยเดิมทั้งหมดอย่างละเอียด
+ทำ `LT-001` เพื่อตรวจเส้นทางความปลอดภัยเดิมทั้งหมด หรือเริ่ม `LT-201` สำหรับ
+REST API ของ account, positions และ trades

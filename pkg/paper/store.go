@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	currentSchemaVersion       = 1
+	currentSchemaVersion       = 2
 	sqliteConstraintUniqueCode = 2067
 )
 
@@ -105,6 +105,20 @@ CREATE INDEX IF NOT EXISTS idx_paper_trades_account_closed
     ON paper_trades(account_id, closed_at DESC);
 `,
 	},
+	{
+		version: 2,
+		sql: `
+CREATE TABLE IF NOT EXISTS paper_audit_events (
+    id         TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES paper_accounts(id),
+    action     TEXT NOT NULL,
+    entity_id  TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_paper_audit_account_created
+    ON paper_audit_events(account_id, created_at DESC);
+`,
+	},
 }
 
 // Store persists the local paper-trading ledger in SQLite.
@@ -169,11 +183,15 @@ func NewStore(workspacePath string) (*Store, error) {
 	if err := migrateStore(context.Background(), db); err != nil {
 		return closeWithError(err)
 	}
+	store := &Store{db: db, path: dbPath}
+	if _, err := store.EnsureDefaultAccount(context.Background(), time.Now()); err != nil {
+		return closeWithError(err)
+	}
 	if err := os.Chmod(dbPath, 0o600); err != nil {
 		return closeWithError(fmt.Errorf("paper: secure database file: %w", err))
 	}
 
-	return &Store{db: db, path: dbPath}, nil
+	return store, nil
 }
 
 func migrateStore(ctx context.Context, db *sql.DB) error {
@@ -369,7 +387,15 @@ const positionSelect = `
 
 // ListOpenPositions returns open positions for an account ordered oldest first.
 func (s *Store) ListOpenPositions(ctx context.Context, accountID string) ([]Position, error) {
-	rows, err := s.db.QueryContext(ctx,
+	return listOpenPositions(ctx, s.db, accountID)
+}
+
+func (tx *Tx) ListOpenPositions(ctx context.Context, accountID string) ([]Position, error) {
+	return listOpenPositions(ctx, tx.runner, accountID)
+}
+
+func listOpenPositions(ctx context.Context, runner sqlRunner, accountID string) ([]Position, error) {
+	rows, err := runner.QueryContext(ctx,
 		positionSelect+" WHERE account_id = ? AND status = ? ORDER BY opened_at ASC",
 		accountID, PositionStatusOpen,
 	)
@@ -390,6 +416,24 @@ func (s *Store) ListOpenPositions(ctx context.Context, accountID string) ([]Posi
 		return nil, fmt.Errorf("paper: list open positions: %w", err)
 	}
 	return positions, nil
+}
+
+func (tx *Tx) DailyRealizedPnL(ctx context.Context, accountID string, since time.Time) (float64, error) {
+	return dailyRealizedPnL(ctx, tx.runner, accountID, since)
+}
+
+func (s *Store) DailyRealizedPnL(ctx context.Context, accountID string, since time.Time) (float64, error) {
+	return dailyRealizedPnL(ctx, s.db, accountID, since)
+}
+
+func dailyRealizedPnL(ctx context.Context, runner sqlRunner, accountID string, since time.Time) (float64, error) {
+	var result float64
+	err := runner.QueryRowContext(ctx, `SELECT COALESCE(SUM(realized_pnl), 0) FROM paper_trades
+		WHERE account_id = ? AND closed_at >= ?`, accountID, formatTime(since)).Scan(&result)
+	if err != nil {
+		return 0, fmt.Errorf("paper: calculate daily realized P/L: %w", err)
+	}
+	return result, nil
 }
 
 func scanPosition(scan func(...any) error) (*Position, error) {
@@ -557,6 +601,40 @@ func (s *Store) SaveTrade(ctx context.Context, accountID string, trade Trade) er
 // SaveTrade inserts an immutable closed-trade record in this transaction.
 func (tx *Tx) SaveTrade(ctx context.Context, accountID string, trade Trade) error {
 	return saveTrade(ctx, tx.runner, accountID, trade)
+}
+
+// SaveAuditEvent appends a safety-relevant event in this transaction.
+func (tx *Tx) SaveAuditEvent(ctx context.Context, event AuditEvent) error {
+	_, err := tx.runner.ExecContext(ctx, `INSERT INTO paper_audit_events
+		(id, account_id, action, entity_id, created_at) VALUES (?, ?, ?, ?, ?)`,
+		event.ID, event.AccountID, event.Action, event.EntityID, formatTime(event.CreatedAt))
+	if err != nil {
+		return fmt.Errorf("paper: save audit event %q: %w", event.ID, err)
+	}
+	return nil
+}
+
+// ListAuditEvents returns newest events first.
+func (s *Store) ListAuditEvents(ctx context.Context, accountID string, limit int) ([]AuditEvent, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, account_id, action, entity_id, created_at
+		FROM paper_audit_events WHERE account_id = ? ORDER BY created_at DESC LIMIT ?`, accountID, boundedLimit(limit))
+	if err != nil {
+		return nil, fmt.Errorf("paper: list audit events: %w", err)
+	}
+	defer rows.Close()
+	var events []AuditEvent
+	for rows.Next() {
+		var event AuditEvent
+		var created string
+		if err := rows.Scan(&event.ID, &event.AccountID, &event.Action, &event.EntityID, &created); err != nil {
+			return nil, err
+		}
+		if err := assignTime("audit.created_at", created, &event.CreatedAt); err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
 }
 
 func saveTrade(ctx context.Context, runner sqlRunner, accountID string, trade Trade) error {
