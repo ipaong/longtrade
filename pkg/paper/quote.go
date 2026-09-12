@@ -9,7 +9,7 @@ import (
 
 // QuoteSource supplies prices to the deterministic paper engine.
 type QuoteSource interface {
-	Quote(context.Context, string) (Quote, error)
+	Quote(ctx context.Context, symbol string) (Quote, error)
 }
 
 // ErrQuoteStale indicates that a structurally valid quote is too old to trade.
