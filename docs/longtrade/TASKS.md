@@ -30,14 +30,14 @@
 | LT-108 | DONE | เพิ่มและแก้ Stop Loss / Take Profit | LT-105 | validate ระดับราคา, บันทึกค่า และ trigger ปิด position ได้แบบ deterministic |
 | LT-109 | DONE | Emergency close และ paper risk limits | LT-107, LT-108 | ปิดเฉพาะ position ที่มี, ป้องกัน order ซ้ำ และบันทึก audit event |
 
-## Phase 2: Backend API
+## Phase 2: Backend API (ดูรายละเอียดใน [PHASE_2_BACKEND_API.md](file:///home/user/Desktop/ลองเทรด/docs/longtrade/PHASE_2_BACKEND_API.md))
 
 | ID | สถานะ | งาน | ขึ้นกับ | เกณฑ์ตรวจรับ |
 |---|---|---|---|---|
-| LT-201 | WAITING | REST API สำหรับ account, positions และ trades | LT-106, LT-107 | JSON schema คงที่, มี mode/as_of/stale และ handler tests |
-| LT-202 | WAITING | API เตรียมและยืนยัน simulated trade | LT-105 | prepare คืน proposal ID, execute ตรวจซ้ำ และ proposal หมดอายุได้ |
-| LT-203 | WAITING | API ปิด position, แก้ SL/TP และ emergency close | LT-108, LT-109 | ทุก endpoint validate input, ใช้ service เดียวกัน และมี tests |
-| LT-204 | WAITING | ทำ error format และ API contract tests | LT-201, LT-203 | UI แยก validation/conflict/unavailable/internal error ได้ |
+| LT-201 | READY | REST API สำหรับ account, positions และ trades | LT-106, LT-107 | JSON schema คงที่, มี mode/as_of/stale และ handler tests |
+| LT-202 | READY | API เตรียมและยืนยัน simulated trade | LT-105 | prepare คืน proposal ID, execute ตรวจซ้ำ และ proposal หมดอายุได้ |
+| LT-203 | READY | API ปิด position, แก้ SL/TP และ emergency close | LT-108, LT-109 | ทุก endpoint validate input, ใช้ service เดียวกัน และมี tests |
+| LT-204 | READY | ทำ error format และ API contract tests | LT-201, LT-203 | UI แยก validation/conflict/unavailable/internal error ได้ |
 
 ## Phase 3: ลองเทรด Web UI และ Chat
 
