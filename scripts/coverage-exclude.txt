@@ -1,0 +1,48 @@
+# File-level Tier 3 exclusions from core coverage metric
+# Lines are matched as path suffixes against the coverage profile
+# These files are hardware-specific, OS-specific stubs, or integration-only paths
+
+# Hardware drivers (require physical hardware)
+pkg/tools/i2c.go
+pkg/tools/i2c_linux.go
+pkg/tools/i2c_other.go
+pkg/tools/spi.go
+pkg/tools/spi_linux.go
+pkg/tools/spi_other.go
+pkg/tools/serial.go
+pkg/tools/serial_darwin.go
+pkg/tools/serial_linux.go
+pkg/tools/serial_unix.go
+pkg/tools/serial_windows.go
+pkg/tools/serial_other.go
+
+# OS-specific process shims (platform dispatch; logic is in cross-platform files)
+pkg/tools/shell_process_unix.go
+pkg/tools/shell_process_windows.go
+
+# OS-specific panic handlers
+pkg/logger/panic_unix.go
+pkg/logger/panic_win.go
+
+# OS-specific pidfile implementations
+pkg/pid/pidfile_unix.go
+pkg/pid/pidfile_windows.go
+
+# Architecture-specific (32-bit fallback; tested via 64-bit variant)
+pkg/channels/feishu/feishu_32.go
+
+# Build-tag stubs (no logic; compile-time only)
+pkg/channels/whatsapp_native/whatsapp_native_stub.go
+
+# Tier 2 LLM provider adapters in the providers root package
+# (network I/O and SSE streaming; pure logic tested by factory/fallback/cooldown tests)
+pkg/providers/antigravity_provider.go
+pkg/providers/claude_provider.go
+pkg/providers/claude_cli_provider.go
+pkg/providers/codex_provider.go
+pkg/providers/codex_cli_provider.go
+pkg/providers/codex_cli_credentials.go
+pkg/providers/github_copilot_provider.go
+pkg/providers/mlxlm_provider.go
+pkg/providers/http_provider.go
+pkg/providers/legacy_provider.go

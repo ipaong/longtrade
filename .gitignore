@@ -1,0 +1,74 @@
+# Binaries
+# Go build artifacts
+bin/
+build/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/khunquant
+/khunquant-test
+cmd/**/workspace
+.claude/
+# Khunquant specific
+.tmp/
+
+# KhunQuant
+.khunquant/
+config.json
+sessions/
+build/
+plans/
+
+# Coverage
+
+# Secrets & Config (keep templates, ignore actual secrets)
+.env
+.env.*
+!.env.example
+.security.yml
+config/config.json
+launcher-config.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+id_rsa*
+credentials*.json
+service-account*.json
+secrets.yaml
+secrets.yml
+
+# Test
+coverage.txt
+coverage.html
+
+# OS
+.DS_Store
+
+# Ralph workspace
+ralph/
+.ralph/
+tasks/
+
+# Plans
+docs/plans/
+
+# Editors
+.vscode/
+.idea/
+
+# Added by goreleaser init:
+dist/
+*.vite/
+
+# Windows Application Icon/Resource
+*.syso
+
+# Keep embedded backend dist directory placeholder in VCS
+!web/backend/dist/
+web/backend/dist/*
+!web/backend/dist/.gitkeep

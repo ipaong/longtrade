@@ -1,0 +1,85 @@
+version: 2
+
+# Majors get their own PRs rather than riding inside a routine group.
+# TypeScript 6 -> 7 arrived this way once and broke tsc, vite build and
+# typescript-eslint at the same time, inside a PR labelled "33 updates".
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Bangkok"
+    groups:
+      go-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "npm"
+    directory: "/web/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:15"
+      timezone: "Asia/Bangkok"
+    groups:
+      frontend-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:30"
+      timezone: "Asia/Bangkok"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "docker"
+    directory: "/docker"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:45"
+      timezone: "Asia/Bangkok"
+    groups:
+      docker-images:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      # The builder image is pinned to the exact toolchain in go.mod (see PR #64),
+      # so an automatic bump silently un-aligns the two. Update both together by
+      # hand when the Go version moves.
+      - dependency-name: "golang"
+
+  - package-ecosystem: "docker-compose"
+    directory: "/docker"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "10:00"
+      timezone: "Asia/Bangkok"
+    groups:
+      docker-compose-images:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"

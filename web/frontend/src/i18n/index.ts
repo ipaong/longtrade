@@ -1,0 +1,62 @@
+import dayjs from "dayjs"
+import "dayjs/locale/en"
+import "dayjs/locale/th"
+import "dayjs/locale/zh-cn"
+import localizedFormat from "dayjs/plugin/localizedFormat"
+import relativeTime from "dayjs/plugin/relativeTime"
+import i18n from "i18next"
+import LanguageDetector from "i18next-browser-languagedetector"
+import { initReactI18next } from "react-i18next"
+
+import en from "./locales/en.json"
+import th from "./locales/th.json"
+import zh from "./locales/zh.json"
+
+dayjs.extend(relativeTime)
+dayjs.extend(localizedFormat)
+
+i18n
+  // detect user language
+  // learn more: https://github.com/i18next/i18next-browser-languageDetector
+  .use(LanguageDetector)
+  // pass the i18n instance to react-i18next.
+  .use(initReactI18next)
+  // init i18next
+  // for all options read: https://www.i18next.com/overview/configuration-options
+  .init({
+    resources: {
+      en: {
+        translation: en,
+      },
+      th: {
+        translation: th,
+      },
+      zh: {
+        translation: zh,
+      },
+    },
+    fallbackLng: "en",
+    debug: false,
+
+    detection: {
+      order: ["cookie"],
+      caches: ["cookie"],
+      cookieMinutes: 525600, // 1 year
+    },
+
+    interpolation: {
+      escapeValue: false, // not needed for react as it escapes by default
+    },
+  })
+
+i18n.on("languageChanged", (lng) => {
+  if (lng.startsWith("zh")) {
+    dayjs.locale("zh-cn")
+  } else if (lng.startsWith("th")) {
+    dayjs.locale("th")
+  } else {
+    dayjs.locale("en")
+  }
+})
+
+export default i18n

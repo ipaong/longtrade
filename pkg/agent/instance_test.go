@@ -1,0 +1,601 @@
+package agent
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/media"
+	"github.com/cryptoquantumwave/khunquant/pkg/providers"
+)
+
+func TestNewAgentInstance_UsesDefaultsTemperatureAndMaxTokens(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-instance-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         1234,
+				MaxToolIterations: 5,
+			},
+		},
+	}
+
+	configuredTemp := 1.0
+	cfg.Agents.Defaults.Temperature = &configuredTemp
+
+	provider := &mockProvider{}
+	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, provider)
+
+	if agent.MaxTokens != 1234 {
+		t.Fatalf("MaxTokens = %d, want %d", agent.MaxTokens, 1234)
+	}
+	if agent.Temperature != 1.0 {
+		t.Fatalf("Temperature = %f, want %f", agent.Temperature, 1.0)
+	}
+}
+
+func TestNewAgentInstance_DefaultsTemperatureWhenZero(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-instance-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         1234,
+				MaxToolIterations: 5,
+			},
+		},
+	}
+
+	configuredTemp := 0.0
+	cfg.Agents.Defaults.Temperature = &configuredTemp
+
+	provider := &mockProvider{}
+	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, provider)
+
+	if agent.Temperature != 0.0 {
+		t.Fatalf("Temperature = %f, want %f", agent.Temperature, 0.0)
+	}
+}
+
+func TestNewAgentInstance_DefaultsTemperatureWhenUnset(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-instance-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         1234,
+				MaxToolIterations: 5,
+			},
+		},
+	}
+
+	provider := &mockProvider{}
+	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, provider)
+
+	if agent.Temperature != 0.7 {
+		t.Fatalf("Temperature = %f, want %f", agent.Temperature, 0.7)
+	}
+}
+
+func TestNewAgentInstance_ResolveCandidatesFromModelListAlias(t *testing.T) {
+	tests := []struct {
+		name         string
+		aliasName    string
+		modelName    string
+		apiBase      string
+		wantProvider string
+		wantModel    string
+	}{
+		{
+			name:         "alias with provider prefix",
+			aliasName:    "step-3.5-flash",
+			modelName:    "openrouter/stepfun/step-3.5-flash:free",
+			apiBase:      "https://openrouter.ai/api/v1",
+			wantProvider: "openrouter",
+			wantModel:    "stepfun/step-3.5-flash:free",
+		},
+		{
+			name:         "alias without provider prefix",
+			aliasName:    "glm-5",
+			modelName:    "glm-5",
+			apiBase:      "https://api.z.ai/api/coding/paas/v4",
+			wantProvider: "openai",
+			wantModel:    "glm-5",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir, err := os.MkdirTemp("", "agent-instance-test-*")
+			if err != nil {
+				t.Fatalf("Failed to create temp dir: %v", err)
+			}
+			defer os.RemoveAll(tmpDir)
+
+			cfg := &config.Config{
+				Agents: config.AgentsConfig{
+					Defaults: config.AgentDefaults{
+						Workspace: tmpDir,
+						Model:     tt.aliasName,
+					},
+				},
+				ModelList: []config.ModelConfig{
+					{
+						ModelName: tt.aliasName,
+						Model:     tt.modelName,
+						APIBase:   tt.apiBase,
+					},
+				},
+			}
+
+			provider := &mockProvider{}
+			agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, provider)
+
+			if len(agent.Candidates) != 1 {
+				t.Fatalf("len(Candidates) = %d, want 1", len(agent.Candidates))
+			}
+			if agent.Candidates[0].Provider != tt.wantProvider {
+				t.Fatalf("candidate provider = %q, want %q", agent.Candidates[0].Provider, tt.wantProvider)
+			}
+			if agent.Candidates[0].Model != tt.wantModel {
+				t.Fatalf("candidate model = %q, want %q", agent.Candidates[0].Model, tt.wantModel)
+			}
+		})
+	}
+}
+
+func TestNewAgentInstance_AllowsMediaTempDirForReadListAndExec(t *testing.T) {
+	workspace := t.TempDir()
+	mediaDir := media.TempDir()
+	if err := os.MkdirAll(mediaDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(mediaDir) error = %v", err)
+	}
+
+	mediaFile, err := os.CreateTemp(mediaDir, "instance-tool-*.txt")
+	if err != nil {
+		t.Fatalf("CreateTemp(mediaDir) error = %v", err)
+	}
+	mediaPath := mediaFile.Name()
+	if _, err := mediaFile.WriteString("attachment content"); err != nil {
+		mediaFile.Close()
+		t.Fatalf("WriteString(mediaFile) error = %v", err)
+	}
+	if err := mediaFile.Close(); err != nil {
+		t.Fatalf("Close(mediaFile) error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(mediaPath) })
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:           workspace,
+				Model:               "test-model",
+				RestrictToWorkspace: true,
+			},
+		},
+		Tools: config.ToolsConfig{
+			ReadFile: config.ReadFileToolConfig{Enabled: true},
+			ListDir:  config.ToolConfig{Enabled: true},
+			Exec: config.ExecConfig{
+				ToolConfig:         config.ToolConfig{Enabled: true},
+				EnableDenyPatterns: true,
+				AllowRemote:        true,
+			},
+		},
+	}
+
+	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, &mockProvider{})
+
+	readTool, ok := agent.Tools.Get("read_file")
+	if !ok {
+		t.Fatal("read_file tool not registered")
+	}
+	readResult := readTool.Execute(context.Background(), map[string]any{"path": mediaPath})
+	if readResult.IsError {
+		t.Fatalf("read_file should allow media temp dir, got: %s", readResult.ForLLM)
+	}
+	if !strings.Contains(readResult.ForLLM, "attachment content") {
+		t.Fatalf("read_file output missing media content: %s", readResult.ForLLM)
+	}
+
+	listTool, ok := agent.Tools.Get("list_dir")
+	if !ok {
+		t.Fatal("list_dir tool not registered")
+	}
+	listResult := listTool.Execute(context.Background(), map[string]any{"path": mediaDir})
+	if listResult.IsError {
+		t.Fatalf("list_dir should allow media temp dir, got: %s", listResult.ForLLM)
+	}
+	if !strings.Contains(listResult.ForLLM, filepath.Base(mediaPath)) {
+		t.Fatalf("list_dir output missing media file: %s", listResult.ForLLM)
+	}
+
+	execTool, ok := agent.Tools.Get("exec")
+	if !ok {
+		t.Fatal("exec tool not registered")
+	}
+	execResult := execTool.Execute(context.Background(), map[string]any{
+		"command":     "cat " + filepath.Base(mediaPath),
+		"working_dir": mediaDir,
+	})
+	if execResult.IsError {
+		t.Fatalf("exec should allow media temp dir, got: %s", execResult.ForLLM)
+	}
+	if !strings.Contains(execResult.ForLLM, "attachment content") {
+		t.Fatalf("exec output missing media content: %s", execResult.ForLLM)
+	}
+}
+
+// TestPopulateCandidateProviders_NilCfgIsNoop verifies that passing a nil
+// config does not panic and leaves the output map empty.
+func TestPopulateCandidateProviders_NilCfgIsNoop(t *testing.T) {
+	out := map[string]providers.LLMProvider{}
+	populateCandidateProvidersFromNames(nil, t.TempDir(), []string{"gpt-4o"}, out)
+	if len(out) != 0 {
+		t.Fatalf("expected empty map, got %d entries", len(out))
+	}
+}
+
+// TestPopulateCandidateProviders_SkipsExistingKeys verifies that a key already
+// present in the output map is not overwritten.
+func TestPopulateCandidateProviders_SkipsExistingKeys(t *testing.T) {
+	existing := &mockProvider{}
+	key := providers.ModelKey("openai", "gpt-4o")
+	out := map[string]providers.LLMProvider{key: existing}
+
+	cfg := &config.Config{
+		ModelList: []config.ModelConfig{
+			{ModelName: "my-gpt", Model: "openai/gpt-4o", APIKey: *config.NewSecureString("test-key")},
+		},
+	}
+	populateCandidateProvidersFromNames(cfg, t.TempDir(), []string{"my-gpt"}, out)
+
+	if out[key] != existing {
+		t.Fatal("existing provider entry was overwritten; expected it to be preserved")
+	}
+}
+
+// TestPopulateCandidateProviders_ResolvesAlias verifies that a model_name
+// alias (e.g. "my-gpt") is resolved via GetModelConfig and the provider
+// is created using the underlying model's config.
+func TestPopulateCandidateProviders_ResolvesAlias(t *testing.T) {
+	workspace := t.TempDir()
+	out := map[string]providers.LLMProvider{}
+
+	cfg := &config.Config{
+		ModelList: []config.ModelConfig{
+			{ModelName: "my-gpt", Model: "openai/gpt-4o", APIBase: "https://api.openai.com/v1", Workspace: workspace},
+		},
+	}
+	populateCandidateProvidersFromNames(cfg, workspace, []string{"my-gpt"}, out)
+
+	key := providers.ModelKey("openai", "gpt-4o")
+	if out[key] == nil {
+		t.Fatalf("expected CandidateProviders[%q] to be populated for alias", key)
+	}
+}
+
+// TestPopulateCandidateProviders_ResolvesProtocolPrefix verifies that a
+// model_list entry using full "provider/model" notation (e.g.
+// "gemini/gemma-3-27b-it") is matched correctly when referenced by model_name.
+func TestPopulateCandidateProviders_ResolvesProtocolPrefix(t *testing.T) {
+	workspace := t.TempDir()
+	out := map[string]providers.LLMProvider{}
+
+	cfg := &config.Config{
+		ModelList: []config.ModelConfig{
+			{
+				ModelName: "gemma",
+				Model:     "gemini/gemma-3-27b-it",
+				APIKey:    *config.NewSecureString("gemini-test-key"),
+				Workspace: workspace,
+			},
+		},
+	}
+	populateCandidateProvidersFromNames(cfg, workspace, []string{"gemma"}, out)
+
+	key := providers.ModelKey("gemini", "gemma-3-27b-it")
+	if out[key] == nil {
+		t.Fatalf("expected CandidateProviders[%q] to be populated for protocol-prefixed model", key)
+	}
+}
+
+// TestPopulateCandidateProviders_EmptyNamesIsNoop verifies the early-exit
+// path when the names slice is empty.
+func TestPopulateCandidateProviders_EmptyNamesIsNoop(t *testing.T) {
+	out := map[string]providers.LLMProvider{}
+	cfg := &config.Config{
+		ModelList: []config.ModelConfig{
+			{ModelName: "my-gpt", Model: "openai/gpt-4o", APIKey: *config.NewSecureString("key")},
+		},
+	}
+	populateCandidateProvidersFromNames(cfg, t.TempDir(), nil, out)
+	if len(out) != 0 {
+		t.Fatalf("expected empty map, got %d entries", len(out))
+	}
+}
+
+// TestPopulateCandidateProviders_EmptyModelListIsNoop verifies the early-exit
+// path when model_list is empty — no provider can be created.
+func TestPopulateCandidateProviders_EmptyModelListIsNoop(t *testing.T) {
+	out := map[string]providers.LLMProvider{}
+	cfg := &config.Config{}
+	populateCandidateProvidersFromNames(cfg, t.TempDir(), []string{"gpt-4o"}, out)
+	if len(out) != 0 {
+		t.Fatalf("expected empty map, got %d entries", len(out))
+	}
+}
+
+// TestPopulateCandidateProviders_UnmatchedNameIsSkipped verifies that a
+// name with no matching model_list entry is skipped and does not
+// cause a panic or leave a nil entry in the map.
+func TestPopulateCandidateProviders_UnmatchedNameIsSkipped(t *testing.T) {
+	out := map[string]providers.LLMProvider{}
+	cfg := &config.Config{
+		ModelList: []config.ModelConfig{
+			{ModelName: "my-gpt", Model: "openai/gpt-4o", APIKey: *config.NewSecureString("key")},
+		},
+	}
+	populateCandidateProvidersFromNames(cfg, t.TempDir(), []string{"nonexistent-model"}, out)
+
+	if len(out) != 0 {
+		t.Fatalf("expected empty map for unmatched name, got %d entries", len(out))
+	}
+}
+
+// TestNewAgentInstance_CandidateProvidersPopulatedForCrossProviderFallbacks
+// mirrors the exact scenario from bug #2140: primary model on OpenRouter with
+// Gemini fallbacks. Each entry must get its own provider instance so that
+// fallback requests go to the correct API endpoint, not the primary's.
+func TestNewAgentInstance_CandidateProvidersPopulatedForCrossProviderFallbacks(t *testing.T) {
+	workspace := t.TempDir()
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:      workspace,
+				ModelName:      "mistral-small-3.1",
+				ModelFallbacks: []string{"gemma-3-27b", "gemini-images"},
+			},
+		},
+		ModelList: []config.ModelConfig{
+			{
+				ModelName: "mistral-small-3.1",
+				Model:     "openrouter/mistralai/mistral-small-3.1-24b-instruct:free",
+				APIBase:   "https://openrouter.ai/api/v1",
+				APIKey:    *config.NewSecureString("sk-or-test"),
+				Workspace: workspace,
+			},
+			{
+				ModelName: "gemma-3-27b",
+				Model:     "gemini/gemma-3-27b-it",
+				APIKey:    *config.NewSecureString("AIzaSy-test"),
+				Workspace: workspace,
+			},
+			{
+				ModelName: "gemini-images",
+				Model:     "gemini/gemini-2.5-flash-lite",
+				APIKey:    *config.NewSecureString("AIzaSy-test"),
+				Workspace: workspace,
+			},
+		},
+	}
+
+	primaryProvider := &mockProvider{}
+	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, primaryProvider)
+
+	// Only fallback models need entries — the primary uses the injected provider directly.
+	wantKeys := []string{
+		providers.ModelKey("gemini", "gemma-3-27b-it"),
+		providers.ModelKey("gemini", "gemini-2.5-flash-lite"),
+	}
+
+	for _, key := range wantKeys {
+		p, ok := agent.CandidateProviders[key]
+		if !ok {
+			t.Errorf("CandidateProviders missing key %q", key)
+			continue
+		}
+		if p == nil {
+			t.Errorf("CandidateProviders[%q] is nil", key)
+		}
+		// Each fallback must use its own provider, not the injected primary.
+		if p == primaryProvider {
+			t.Errorf(
+				"CandidateProviders[%q] is the same instance as the primary provider; fallback would inherit primary credentials",
+				key,
+			)
+		}
+	}
+
+	if t.Failed() {
+		t.Logf("CandidateProviders keys present: %v", func() []string {
+			keys := make([]string, 0, len(agent.CandidateProviders))
+			for k := range agent.CandidateProviders {
+				keys = append(keys, k)
+			}
+			return keys
+		}())
+	}
+}
+
+func TestNewAgentInstance_InvalidExecConfigDoesNotExit(t *testing.T) {
+	workspace := t.TempDir()
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: workspace,
+				ModelName: "test-model",
+			},
+		},
+		Tools: config.ToolsConfig{
+			ReadFile: config.ReadFileToolConfig{Enabled: true},
+			Exec: config.ExecConfig{
+				ToolConfig:         config.ToolConfig{Enabled: true},
+				EnableDenyPatterns: true,
+				CustomDenyPatterns: []string{"[invalid-regex"},
+			},
+		},
+	}
+
+	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, &mockProvider{})
+	if agent == nil {
+		t.Fatal("expected agent instance, got nil")
+	}
+
+	if _, ok := agent.Tools.Get("exec"); ok {
+		t.Fatal("exec tool should not be registered when exec config is invalid")
+	}
+
+	if _, ok := agent.Tools.Get("read_file"); !ok {
+		t.Fatal("read_file tool should still be registered")
+	}
+}
+
+func TestAgentInstance_AllowsMCPServer(t *testing.T) {
+	t.Run("nil allowlist allows all", func(t *testing.T) {
+		agent := &AgentInstance{}
+		if !agent.AllowsMCPServer("github") {
+			t.Fatal("expected nil MCP allowlist to allow all servers")
+		}
+	})
+
+	t.Run("explicit allowlist filters servers", func(t *testing.T) {
+		agent := &AgentInstance{
+			MCPServerAllowlist: map[string]struct{}{
+				"github": {},
+			},
+		}
+		if !agent.AllowsMCPServer("GitHub") {
+			t.Fatal("expected MCP server matching to be case-insensitive")
+		}
+		if agent.AllowsMCPServer("filesystem") {
+			t.Fatal("expected filesystem to be blocked by MCP allowlist")
+		}
+	})
+}
+
+func TestAgentInstance_MCPServersFromConfig_Restricts(t *testing.T) {
+	workspace := t.TempDir()
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:   workspace,
+				ModelName:   "test-model",
+				MaxTokens:   1000,
+				Temperature: ptr(0.5),
+			},
+		},
+	}
+
+	agentCfg := &config.AgentConfig{
+		ID:         "restricted",
+		Workspace:  workspace,
+		MCPServers: []string{"github", "filesystem"},
+	}
+
+	agent := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, &mockProvider{})
+
+	if !agent.AllowsMCPServer("github") {
+		t.Fatal("expected github to be allowed from config")
+	}
+	if !agent.AllowsMCPServer("filesystem") {
+		t.Fatal("expected filesystem to be allowed from config")
+	}
+	if agent.AllowsMCPServer("slack") {
+		t.Fatal("expected slack to be blocked by config allowlist")
+	}
+}
+
+func TestAgentInstance_MCPServersFromConfig_MixedCase(t *testing.T) {
+	workspace := t.TempDir()
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:   workspace,
+				ModelName:   "test-model",
+				MaxTokens:   1000,
+				Temperature: ptr(0.5),
+			},
+		},
+	}
+
+	agentCfg := &config.AgentConfig{
+		ID:         "mixedcase",
+		Workspace:  workspace,
+		MCPServers: []string{"GitHub", "FileSystem"},
+	}
+
+	agent := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, &mockProvider{})
+
+	if !agent.AllowsMCPServer("github") {
+		t.Fatal("expected lowercase github to match uppercase config")
+	}
+	if !agent.AllowsMCPServer("GITHUB") {
+		t.Fatal("expected uppercase GITHUB to match mixed-case config")
+	}
+	if !agent.AllowsMCPServer("filesystem") {
+		t.Fatal("expected lowercase filesystem to match mixed-case config")
+	}
+}
+
+func TestAgentInstance_NoMCPServersConfig_AllowsAll(t *testing.T) {
+	workspace := t.TempDir()
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:   workspace,
+				ModelName:   "test-model",
+				MaxTokens:   1000,
+				Temperature: ptr(0.5),
+			},
+		},
+	}
+
+	agentCfg := &config.AgentConfig{
+		ID:        "noconfig",
+		Workspace: workspace,
+	}
+
+	agent := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, &mockProvider{})
+
+	if !agent.AllowsMCPServer("github") {
+		t.Fatal("expected github to be allowed when no allowlist configured")
+	}
+	if !agent.AllowsMCPServer("slack") {
+		t.Fatal("expected slack to be allowed when no allowlist configured")
+	}
+	if !agent.AllowsMCPServer("filesystem") {
+		t.Fatal("expected filesystem to be allowed when no allowlist configured")
+	}
+}
+
+func ptr(f float64) *float64 {
+	return &f
+}

@@ -1,0 +1,231 @@
+package voice
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+)
+
+// Ensure GroqTranscriber satisfies the Transcriber interface at compile time.
+var _ Transcriber = (*GroqTranscriber)(nil)
+
+func TestGroqTranscriberName(t *testing.T) {
+	tr := NewGroqTranscriber("sk-test")
+	if got := tr.Name(); got != "groq" {
+		t.Errorf("Name() = %q, want %q", got, "groq")
+	}
+}
+
+func TestDetectTranscriber(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      *config.Config
+		wantNil  bool
+		wantName string
+	}{
+		{
+			name:    "no config",
+			cfg:     &config.Config{},
+			wantNil: true,
+		},
+		{
+			name: "groq provider key",
+			cfg: &config.Config{
+				Providers: config.ProvidersConfig{
+					Groq: config.ProviderConfig{APIKey: "sk-groq-direct"},
+				},
+			},
+			wantName: "groq",
+		},
+		{
+			name: "groq via model list",
+			cfg: &config.Config{
+				ModelList: []config.ModelConfig{
+					{Model: "openai/gpt-4o", APIKey: *config.NewSecureString("sk-openai")},
+					{Model: "groq/llama-3.3-70b", APIKey: *config.NewSecureString("sk-groq-model")},
+				},
+			},
+			wantName: "groq",
+		},
+		{
+			name: "groq model list entry without key is skipped",
+			cfg: &config.Config{
+				ModelList: []config.ModelConfig{
+					{Model: "groq/llama-3.3-70b", APIKey: *config.NewSecureString("")},
+				},
+			},
+			wantNil: true,
+		},
+		{
+			name: "provider key takes priority over model list",
+			cfg: &config.Config{
+				Providers: config.ProvidersConfig{
+					Groq: config.ProviderConfig{APIKey: "sk-groq-direct"},
+				},
+				ModelList: []config.ModelConfig{
+					{Model: "groq/llama-3.3-70b", APIKey: *config.NewSecureString("sk-groq-model")},
+				},
+			},
+			wantName: "groq",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := DetectTranscriber(tc.cfg)
+			if tc.wantNil {
+				if tr != nil {
+					t.Errorf("DetectTranscriber() = %v, want nil", tr)
+				}
+				return
+			}
+			if tr == nil {
+				t.Fatal("DetectTranscriber() = nil, want non-nil")
+			}
+			if got := tr.Name(); got != tc.wantName {
+				t.Errorf("Name() = %q, want %q", got, tc.wantName)
+			}
+		})
+	}
+}
+
+func TestTranscribe(t *testing.T) {
+	// Write a minimal fake audio file so the transcriber can open and send it.
+	tmpDir := t.TempDir()
+	audioPath := filepath.Join(tmpDir, "clip.ogg")
+	if err := os.WriteFile(audioPath, []byte("fake-audio-data"), 0o644); err != nil {
+		t.Fatalf("failed to write fake audio file: %v", err)
+	}
+
+	t.Run("success", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/audio/transcriptions" {
+				t.Errorf("unexpected path: %s", r.URL.Path)
+			}
+			if r.Header.Get("Authorization") != "Bearer sk-test" {
+				t.Errorf("unexpected Authorization header: %s", r.Header.Get("Authorization"))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(TranscriptionResponse{
+				Text:     "hello world",
+				Language: "en",
+				Duration: 1.5,
+			})
+		}))
+		defer srv.Close()
+
+		tr := NewGroqTranscriber("sk-test")
+		tr.apiBase = srv.URL
+
+		resp, err := tr.Transcribe(context.Background(), audioPath)
+		if err != nil {
+			t.Fatalf("Transcribe() error: %v", err)
+		}
+		if resp.Text != "hello world" {
+			t.Errorf("Text = %q, want %q", resp.Text, "hello world")
+		}
+		if resp.Language != "en" {
+			t.Errorf("Language = %q, want %q", resp.Language, "en")
+		}
+	})
+
+	t.Run("api error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, `{"error":"invalid_api_key"}`, http.StatusUnauthorized)
+		}))
+		defer srv.Close()
+
+		tr := NewGroqTranscriber("sk-bad")
+		tr.apiBase = srv.URL
+
+		_, err := tr.Transcribe(context.Background(), audioPath)
+		if err == nil {
+			t.Fatal("expected error for non-200 response, got nil")
+		}
+	})
+
+	t.Run("missing file", func(t *testing.T) {
+		tr := NewGroqTranscriber("sk-test")
+		_, err := tr.Transcribe(context.Background(), filepath.Join(tmpDir, "nonexistent.ogg"))
+		if err == nil {
+			t.Fatal("expected error for missing file, got nil")
+		}
+	})
+}
+
+// TestGroqBackwardCompat verifies that existing Groq-only configurations
+// continue to work without any config changes, proving backward compatibility.
+func TestGroqBackwardCompat(t *testing.T) {
+	tmpDir := t.TempDir()
+	audioPath := filepath.Join(tmpDir, "clip.ogg")
+	if err := os.WriteFile(audioPath, []byte("fake-audio-data"), 0o644); err != nil {
+		t.Fatalf("failed to write fake audio file: %v", err)
+	}
+
+	// Simulate an existing user config with only Groq provider API key.
+	// This should continue to work exactly as before.
+	cfg := &config.Config{
+		Providers: config.ProvidersConfig{
+			Groq: config.ProviderConfig{APIKey: "sk-groq-test"},
+		},
+	}
+
+	// DetectTranscriber should return a Groq transcriber
+	tr := DetectTranscriber(cfg)
+	if tr == nil {
+		t.Fatal("DetectTranscriber() = nil, want Groq transcriber")
+	}
+	if got := tr.Name(); got != "groq" {
+		t.Errorf("Name() = %q, want %q", got, "groq")
+	}
+
+	// Verify the Groq transcriber makes the correct API request
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify endpoint
+		if r.URL.Path != "/audio/transcriptions" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		// Verify authorization header format
+		if r.Header.Get("Authorization") != "Bearer sk-groq-test" {
+			t.Errorf("unexpected Authorization header: %s", r.Header.Get("Authorization"))
+		}
+		// Verify multipart form submission with model field
+		if err := r.ParseMultipartForm(1024 * 1024); err != nil {
+			t.Errorf("ParseMultipartForm() error: %v", err)
+		}
+		// In the Groq transcriber, the model field is "whisper-large-v3"
+		// (This is the existing hardcoded model in the Groq implementation)
+		if model := r.FormValue("model"); model != "whisper-large-v3" {
+			t.Errorf("model field = %q, want %q", model, "whisper-large-v3")
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(TranscriptionResponse{
+			Text:     "backward compat verified",
+			Language: "en",
+		})
+	}))
+	defer srv.Close()
+
+	// Override the Groq transcriber's API base to use our test server
+	groqTr, ok := tr.(*GroqTranscriber)
+	if !ok {
+		t.Fatalf("expected *GroqTranscriber, got %T", tr)
+	}
+	groqTr.apiBase = srv.URL
+
+	// Perform transcription and verify it works
+	resp, err := groqTr.Transcribe(context.Background(), audioPath)
+	if err != nil {
+		t.Fatalf("Transcribe() error: %v", err)
+	}
+	if resp.Text != "backward compat verified" {
+		t.Errorf("Text = %q, want %q", resp.Text, "backward compat verified")
+	}
+}

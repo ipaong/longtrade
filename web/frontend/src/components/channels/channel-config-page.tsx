@@ -1,0 +1,631 @@
+import { IconLoader2 } from "@tabler/icons-react"
+import { useAtomValue } from "jotai"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useTranslation } from "react-i18next"
+import { toast } from "sonner"
+
+import {
+  type ChannelConfig,
+  type SupportedChannel,
+  getAppConfig,
+  getChannelsCatalog,
+  patchAppConfig,
+} from "@/api/channels"
+import { type ArrayFieldFlusher } from "@/components/channels/channel-array-list-field"
+import {
+  normalizeAllowFromValues,
+  serializeStringArrayForSubmit,
+} from "@/components/channels/channel-array-utils"
+import {
+  SECRET_FIELD_MAP,
+  buildEditConfig,
+} from "@/components/channels/channel-config-fields"
+import { getChannelDisplayName } from "@/components/channels/channel-display-name"
+import { DiscordForm } from "@/components/channels/channel-forms/discord-form"
+import { FeishuForm } from "@/components/channels/channel-forms/feishu-form"
+import { GenericForm } from "@/components/channels/channel-forms/generic-form"
+import { SlackForm } from "@/components/channels/channel-forms/slack-form"
+import { TelegramForm } from "@/components/channels/channel-forms/telegram-form"
+import { PageHeader } from "@/components/page-header"
+import { Button } from "@/components/ui/button"
+import { Switch } from "@/components/ui/switch"
+import { gatewayAtom } from "@/store/gateway"
+
+interface ChannelConfigPageProps {
+  channelName: string
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>
+  }
+  return {}
+}
+
+function asString(value: unknown): string {
+  return typeof value === "string" ? value : ""
+}
+
+function asBool(value: unknown): boolean {
+  return value === true
+}
+
+function setRecordValueByPath(
+  source: Record<string, unknown>,
+  pathSegments: string[],
+  value: unknown,
+): Record<string, unknown> {
+  const [segment, ...rest] = pathSegments
+  if (!segment) {
+    return source
+  }
+  if (rest.length === 0) {
+    return { ...source, [segment]: value }
+  }
+  return {
+    ...source,
+    [segment]: setRecordValueByPath(asRecord(source[segment]), rest, value),
+  }
+}
+
+function setConfigValueByPath(
+  source: ChannelConfig,
+  fieldPath: string,
+  value: unknown,
+): ChannelConfig {
+  return setRecordValueByPath(source, fieldPath.split("."), value)
+}
+
+function serializeGroupTriggerForSubmit(value: unknown): unknown {
+  const groupTrigger = asRecord(value)
+  if (Object.keys(groupTrigger).length === 0) {
+    return value
+  }
+  return {
+    ...groupTrigger,
+    prefixes: serializeStringArrayForSubmit(groupTrigger.prefixes),
+  }
+}
+
+const CHANNEL_COMMON_CONFIG_KEYS = new Set([
+  "allow_from",
+  "group_trigger",
+  "placeholder",
+  "reasoning_channel_id",
+  "typing",
+])
+
+function normalizeConfig(
+  channel: SupportedChannel,
+  rawConfig: ChannelConfig,
+): ChannelConfig {
+  const config = { ...rawConfig }
+  if (channel.name === "whatsapp_native") {
+    config.use_native = true
+  }
+  if (channel.name === "whatsapp") {
+    config.use_native = false
+  }
+  return config
+}
+
+function buildSavePayload(
+  channel: SupportedChannel,
+  editConfig: ChannelConfig,
+  enabled: boolean,
+): ChannelConfig {
+  const payload: ChannelConfig = { enabled }
+
+  for (const [key, value] of Object.entries(editConfig)) {
+    if (key.startsWith("_")) continue
+    if (key === "enabled") continue
+
+    if (CHANNEL_COMMON_CONFIG_KEYS.has(key)) {
+      if (key === "allow_from") {
+        payload[key] = serializeStringArrayForSubmit(
+          normalizeAllowFromValues(value),
+        )
+      } else if (key === "group_trigger") {
+        payload[key] = serializeGroupTriggerForSubmit(value)
+      } else {
+        payload[key] = value
+      }
+      continue
+    }
+
+    if (key in SECRET_FIELD_MAP) {
+      const editKey = SECRET_FIELD_MAP[key]
+      const incoming = asString(editConfig[editKey])
+      payload[key] = incoming !== "" ? incoming : value
+      continue
+    }
+
+    payload[key] = value
+  }
+
+  // Handle secret fields entered by the user that weren't in the original config
+  // (e.g. first-time setup where the server omits zero-value secret keys from JSON).
+  for (const [secretKey, editKey] of Object.entries(SECRET_FIELD_MAP)) {
+    if (secretKey in payload) continue
+    const incoming = asString(editConfig[editKey])
+    if (incoming !== "") {
+      payload[secretKey] = incoming
+    }
+  }
+
+  if (channel.name === "whatsapp_native") {
+    payload.use_native = true
+  }
+  if (channel.name === "whatsapp") {
+    payload.use_native = false
+  }
+
+  return payload
+}
+
+function isConfigured(
+  channel: SupportedChannel,
+  config: ChannelConfig,
+): boolean {
+  switch (channel.name) {
+    case "telegram":
+      return asString(config.token) !== ""
+    case "discord":
+      return asString(config.token) !== ""
+    case "slack":
+      return asString(config.bot_token) !== ""
+    case "feishu":
+      return (
+        asString(config.app_id) !== "" && asString(config.app_secret) !== ""
+      )
+    case "dingtalk":
+      return (
+        asString(config.client_id) !== "" &&
+        asString(config.client_secret) !== ""
+      )
+    case "line":
+      return asString(config.channel_access_token) !== ""
+    case "qq":
+      return (
+        asString(config.app_id) !== "" && asString(config.app_secret) !== ""
+      )
+    case "onebot":
+      return asString(config.ws_url) !== ""
+    case "wecom":
+      return asString(config.token) !== ""
+    case "wecom_app":
+      return (
+        asString(config.corp_id) !== "" && asString(config.corp_secret) !== ""
+      )
+    case "wecom_aibot":
+      return asString(config.token) !== ""
+    case "whatsapp":
+      return asString(config.bridge_url) !== ""
+    case "whatsapp_native":
+      return asBool(config.use_native)
+    case "pico":
+      return asString(config.token) !== ""
+    case "maixcam":
+      return asString(config.host) !== ""
+    case "matrix":
+      return (
+        asString(config.homeserver) !== "" &&
+        asString(config.user_id) !== "" &&
+        asString(config.access_token) !== ""
+      )
+    case "irc":
+      return asString(config.server) !== ""
+    default:
+      return false
+  }
+}
+
+function getRequiredFieldKeys(channelName: string): string[] {
+  switch (channelName) {
+    case "telegram":
+      return ["token"]
+    case "discord":
+      return ["token"]
+    case "slack":
+      return ["bot_token"]
+    case "feishu":
+      return ["app_id", "app_secret"]
+    case "dingtalk":
+      return ["client_id", "client_secret"]
+    case "line":
+      return ["channel_secret", "channel_access_token"]
+    case "qq":
+      return ["app_id", "app_secret"]
+    case "onebot":
+      return ["ws_url"]
+    case "wecom":
+      return ["token"]
+    case "wecom_app":
+      return ["corp_id", "corp_secret"]
+    case "wecom_aibot":
+      return ["token"]
+    case "whatsapp":
+      return ["bridge_url"]
+    case "pico":
+      return ["token"]
+    case "maixcam":
+      return ["host"]
+    case "matrix":
+      return ["homeserver", "user_id", "access_token"]
+    case "irc":
+      return ["server"]
+    default:
+      return []
+  }
+}
+
+function isMissingRequiredValue(value: unknown): boolean {
+  if (value === null || value === undefined) {
+    return true
+  }
+  if (typeof value === "string") {
+    return value.trim() === ""
+  }
+  if (Array.isArray(value)) {
+    return value.length === 0
+  }
+  return false
+}
+
+function getChannelDocSlug(channelName: string): string {
+  return channelName.replaceAll("_", "-")
+}
+
+const CHANNELS_WITHOUT_DOCS = new Set([
+  "pico",
+  "wecom",
+  "matrix",
+  "irc",
+  "whatsapp",
+  "whatsapp_native",
+])
+
+export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
+  const { t, i18n } = useTranslation()
+  const gateway = useAtomValue(gatewayAtom)
+
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [fetchError, setFetchError] = useState("")
+  const [serverError, setServerError] = useState("")
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+
+  const [channel, setChannel] = useState<SupportedChannel | null>(null)
+  const [baseConfig, setBaseConfig] = useState<ChannelConfig>({})
+  const [editConfig, setEditConfig] = useState<ChannelConfig>({})
+  const [enabled, setEnabled] = useState(false)
+  const [arrayFieldResetVersion, setArrayFieldResetVersion] = useState(0)
+  const arrayFieldFlushersRef = useRef(new Map<string, ArrayFieldFlusher>())
+
+  const loadData = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [catalog, appConfig] = await Promise.all([
+        getChannelsCatalog(),
+        getAppConfig(),
+      ])
+      const matched =
+        catalog.channels.find((item) => item.name === channelName) ?? null
+
+      if (!matched) {
+        setChannel(null)
+        setFetchError(
+          t("channels.page.notFound", {
+            name: channelName,
+          }),
+        )
+        return
+      }
+
+      const channelsConfig = asRecord(asRecord(appConfig).channels)
+      const raw = asRecord(channelsConfig[matched.config_key])
+      const normalized = normalizeConfig(matched, raw)
+
+      setChannel(matched)
+      setBaseConfig(normalized)
+      setEditConfig(buildEditConfig(matched.name, normalized))
+      setEnabled(asBool(normalized.enabled))
+      setFetchError("")
+      setServerError("")
+      setFieldErrors({})
+    } catch (e) {
+      setFetchError(e instanceof Error ? e.message : t("channels.loadError"))
+    } finally {
+      setLoading(false)
+    }
+  }, [channelName, t])
+
+  useEffect(() => {
+    loadData()
+  }, [loadData])
+
+  const previousGatewayStatusRef = useRef(gateway.status)
+  useEffect(() => {
+    const previousStatus = previousGatewayStatusRef.current
+    if (previousStatus !== "running" && gateway.status === "running") {
+      void loadData()
+    }
+    previousGatewayStatusRef.current = gateway.status
+  }, [gateway.status, loadData])
+
+  const configured = useMemo(() => {
+    if (!channel) return false
+    return isConfigured(channel, baseConfig)
+  }, [channel, baseConfig])
+
+  const docsUrl = useMemo(() => {
+    if (!channel) return ""
+    if (CHANNELS_WITHOUT_DOCS.has(channel.name)) return ""
+    const language = (
+      i18n.resolvedLanguage ??
+      i18n.language ??
+      ""
+    ).toLowerCase()
+    const base = language.startsWith("zh")
+      ? "https://khunquant.com/docs/channels"
+      : "https://khunquant.com/docs/channels"
+    return `${base}/${getChannelDocSlug(channel.name)}`
+  }, [channel, i18n.language, i18n.resolvedLanguage])
+
+  const channelDisplayName = useMemo(() => {
+    if (!channel) return channelName
+    return getChannelDisplayName(channel, t)
+  }, [channel, channelName, t])
+
+  const hiddenKeys = useMemo(() => {
+    if (!channel) return []
+    if (channel.name === "whatsapp") {
+      return ["use_native"]
+    }
+    if (channel.name === "whatsapp_native") {
+      return ["use_native", "bridge_url"]
+    }
+    return []
+  }, [channel])
+  const requiredKeys = useMemo(
+    () => getRequiredFieldKeys(channelName),
+    [channelName],
+  )
+
+  const handleChange = useCallback((key: string, value: unknown) => {
+    const normalizedKey = key.startsWith("_") ? key.slice(1) : key
+    setEditConfig((prev) => ({ ...prev, [key]: value }))
+    setFieldErrors((prev) => {
+      if (!(key in prev) && !(normalizedKey in prev)) {
+        return prev
+      }
+      const next = { ...prev }
+      delete next[key]
+      delete next[normalizedKey]
+      return next
+    })
+  }, [])
+
+  const registerArrayFieldFlusher = useCallback(
+    (fieldPath: string, flusher: ArrayFieldFlusher | null) => {
+      if (flusher) {
+        arrayFieldFlushersRef.current.set(fieldPath, flusher)
+        return
+      }
+      arrayFieldFlushersRef.current.delete(fieldPath)
+    },
+    [],
+  )
+
+  const flushPendingArrayFieldDrafts = useCallback(
+    (sourceConfig: ChannelConfig): ChannelConfig => {
+      let nextConfig = sourceConfig
+      for (const [fieldPath, flusher] of arrayFieldFlushersRef.current) {
+        const flushedValue = flusher()
+        if (flushedValue === null) {
+          continue
+        }
+        nextConfig = setConfigValueByPath(nextConfig, fieldPath, flushedValue)
+      }
+      return nextConfig
+    },
+    [],
+  )
+
+  const handleReset = () => {
+    setEditConfig(buildEditConfig(channel?.name ?? "", baseConfig))
+    setEnabled(asBool(baseConfig.enabled))
+    setServerError("")
+    setFieldErrors({})
+    setArrayFieldResetVersion((version) => version + 1)
+  }
+
+  const handleSave = async () => {
+    if (!channel) return
+
+    const preparedEditConfig = flushPendingArrayFieldDrafts(editConfig)
+    if (preparedEditConfig !== editConfig) {
+      setEditConfig(preparedEditConfig)
+    }
+
+    const missingRequiredFields = requiredKeys.filter((key) => {
+      if (!isMissingRequiredValue(preparedEditConfig[key])) return false
+      const editKey = SECRET_FIELD_MAP[key]
+      if (editKey && !isMissingRequiredValue(preparedEditConfig[editKey])) return false
+      return true
+    })
+    if (missingRequiredFields.length > 0) {
+      const requiredFieldError = t("channels.validation.requiredField")
+      const nextFieldErrors: Record<string, string> = {}
+      for (const key of missingRequiredFields) {
+        nextFieldErrors[key] = requiredFieldError
+      }
+      setFieldErrors(nextFieldErrors)
+      setServerError("")
+      return
+    }
+
+    setSaving(true)
+    setServerError("")
+    setFieldErrors({})
+    try {
+      const savePayload = buildSavePayload(channel, preparedEditConfig, enabled)
+      await patchAppConfig({
+        channels: {
+          [channel.config_key]: savePayload,
+        },
+      })
+      toast.success(t("channels.page.saveSuccess"))
+      await loadData()
+    } catch (e) {
+      const message =
+        e instanceof Error ? e.message : t("channels.page.saveError")
+      setServerError(message)
+      toast.error(message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const renderForm = () => {
+    if (!channel) return null
+    const isEdit = configured
+
+    switch (channel.name) {
+      case "telegram":
+        return (
+          <TelegramForm
+            config={editConfig}
+            onChange={handleChange}
+            isEdit={isEdit}
+            fieldErrors={fieldErrors}
+            registerArrayFieldFlusher={registerArrayFieldFlusher}
+            arrayFieldResetVersion={arrayFieldResetVersion}
+          />
+        )
+      case "discord":
+        return (
+          <DiscordForm
+            config={editConfig}
+            onChange={handleChange}
+            isEdit={isEdit}
+            fieldErrors={fieldErrors}
+            registerArrayFieldFlusher={registerArrayFieldFlusher}
+            arrayFieldResetVersion={arrayFieldResetVersion}
+          />
+        )
+      case "slack":
+        return (
+          <SlackForm
+            config={editConfig}
+            onChange={handleChange}
+            isEdit={isEdit}
+            fieldErrors={fieldErrors}
+            registerArrayFieldFlusher={registerArrayFieldFlusher}
+            arrayFieldResetVersion={arrayFieldResetVersion}
+          />
+        )
+      case "feishu":
+        return (
+          <FeishuForm
+            config={editConfig}
+            onChange={handleChange}
+            isEdit={isEdit}
+            fieldErrors={fieldErrors}
+            registerArrayFieldFlusher={registerArrayFieldFlusher}
+            arrayFieldResetVersion={arrayFieldResetVersion}
+          />
+        )
+      default:
+        return (
+          <GenericForm
+            config={editConfig}
+            onChange={handleChange}
+            isEdit={isEdit}
+            hiddenKeys={hiddenKeys}
+            requiredKeys={requiredKeys}
+            fieldErrors={fieldErrors}
+            registerArrayFieldFlusher={registerArrayFieldFlusher}
+            arrayFieldResetVersion={arrayFieldResetVersion}
+          />
+        )
+    }
+  }
+
+  return (
+    <div className="flex h-full flex-col">
+      <PageHeader
+        title={channelDisplayName}
+        titleExtra={
+          channel ? (
+            <div className="flex items-center gap-1.5">
+              {enabled ? (
+                <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                  {t("channels.page.enabled")}
+                </span>
+              ) : configured ? (
+                <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                  {t("channels.status.configured")}
+                </span>
+              ) : null}
+            </div>
+          ) : undefined
+        }
+      />
+
+      <div className="flex min-h-0 flex-1 justify-center overflow-y-auto px-4 pb-8 sm:px-6">
+        {loading ? (
+          <div className="flex items-center justify-center py-20">
+            <IconLoader2 className="text-muted-foreground size-6 animate-spin" />
+          </div>
+        ) : fetchError ? (
+          <div className="text-destructive bg-destructive/10 rounded-lg px-4 py-3 text-sm">
+            {fetchError}
+          </div>
+        ) : (
+          <div className="w-full max-w-250 space-y-5 pt-2">
+            <div className="flex items-center gap-2 text-sm">
+              <p className="font-medium">
+                {t("channels.edit", {
+                  name: channelDisplayName,
+                })}
+              </p>
+              {channel && docsUrl && (
+                <a
+                  href={docsUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-muted-foreground hover:text-foreground text-xs underline underline-offset-2"
+                >
+                  {t("channels.page.docLink")}
+                </a>
+              )}
+            </div>
+
+            <div className="border-border/60 bg-background flex items-center justify-between rounded-lg border px-4 py-3">
+              <p className="text-sm font-medium">
+                {t("channels.page.enableLabel")}
+              </p>
+              <Switch checked={enabled} onCheckedChange={setEnabled} />
+            </div>
+
+            {renderForm()}
+
+            {serverError && (
+              <p className="text-destructive text-sm">{serverError}</p>
+            )}
+
+            <div className="border-border/60 flex justify-end gap-2 border-t py-4">
+              <Button variant="outline" onClick={handleReset} disabled={saving}>
+                {t("common.reset")}
+              </Button>
+              <Button onClick={handleSave} disabled={saving}>
+                {saving ? t("common.saving") : t("common.save")}
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

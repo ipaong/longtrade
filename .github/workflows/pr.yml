@@ -1,0 +1,133 @@
+name: PR
+
+on:
+  pull_request: { }
+
+jobs:
+  lint:
+    name: Linter
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Run go generate
+        run: go generate ./...
+
+      - name: Golangci Lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.10.1
+
+  vuln_check:
+    name: Security Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+
+      - name: Run Govulncheck
+        run: govulncheck -C . -format text ./...
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Run go generate
+        run: go generate ./...
+
+      - name: Run go test
+        run: go test ./...
+
+  frontend:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      # Pinned to the major that produced the lockfile (v9 format, pnpm 10.x)
+      # rather than @latest. This job exists to catch lockfile problems, so a
+      # floating package manager that might reject or silently rewrite the
+      # lockfile would undermine the check.
+      - name: Setup pnpm
+        run: corepack enable && corepack prepare pnpm@10 --activate
+
+      # --frozen-lockfile is the point: it fails when the lockfile disagrees
+      # with package.json. A Dependabot PR that regenerated the lockfile without
+      # the pnpm.overrides block passed every existing check while making clean
+      # installs impossible and silently dropping two security pins.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # "pnpm build" is "tsc -b && vite build" — the same command that produces
+      # the dashboard embedded in the Go binary.
+      - name: Typecheck and build
+        run: pnpm build
+
+      # The build regenerates routeTree.gen.ts. Generation is deterministic, so
+      # a diff here means the committed file is stale — which is how a
+      # router-plugin bump silently left it 151 lines out of date.
+      - name: Check generated route tree is current
+        run: git diff --exit-code -- src/routeTree.gen.ts
+
+      # Runs last: it is the least severe failure, and a broken build or a
+      # stale generated file should surface first. This also covers the class
+      # of break where a TypeScript upgrade outruns typescript-eslint.
+      - name: Lint
+        run: pnpm lint
+
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Builds only; nothing is pushed. docker-build.yml publishes images and
+      # runs on workflow_call at release time, so before this job no PR ever
+      # built an image. That is how a go.mod directive bump to a version newer
+      # than the builder image reached main with three green checks: CI resolves
+      # its toolchain from go.mod, so only an image build sees the mismatch.
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

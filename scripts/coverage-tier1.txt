@@ -1,0 +1,41 @@
+# Tier 1 — CORE packages for coverage measurement
+# Target: ≥80% weighted (statements covered / total statements in scope)
+# Run via: make cover-core
+# Excludes: cmd/*, web/frontend, TUI, hardware stubs, Tier 2 adapters (LLM providers, channel adapters, exchanges)
+
+github.com/cryptoquantumwave/khunquant/pkg/agent
+github.com/cryptoquantumwave/khunquant/pkg/auth
+github.com/cryptoquantumwave/khunquant/pkg/bus
+github.com/cryptoquantumwave/khunquant/pkg/channels
+github.com/cryptoquantumwave/khunquant/pkg/commands
+github.com/cryptoquantumwave/khunquant/pkg/config
+github.com/cryptoquantumwave/khunquant/pkg/credential
+github.com/cryptoquantumwave/khunquant/pkg/cron
+github.com/cryptoquantumwave/khunquant/pkg/dca
+github.com/cryptoquantumwave/khunquant/pkg/exchanges
+github.com/cryptoquantumwave/khunquant/pkg/fileutil
+github.com/cryptoquantumwave/khunquant/pkg/health
+github.com/cryptoquantumwave/khunquant/pkg/heartbeat
+github.com/cryptoquantumwave/khunquant/pkg/identity
+github.com/cryptoquantumwave/khunquant/pkg/logger
+github.com/cryptoquantumwave/khunquant/pkg/mcp
+github.com/cryptoquantumwave/khunquant/pkg/media
+github.com/cryptoquantumwave/khunquant/pkg/memory
+github.com/cryptoquantumwave/khunquant/pkg/migrate
+github.com/cryptoquantumwave/khunquant/pkg/migrate/internal
+github.com/cryptoquantumwave/khunquant/pkg/migrate/sources/openclaw
+github.com/cryptoquantumwave/khunquant/pkg/pairing
+github.com/cryptoquantumwave/khunquant/pkg/pid
+github.com/cryptoquantumwave/khunquant/pkg/providers
+github.com/cryptoquantumwave/khunquant/pkg/providers/broker
+github.com/cryptoquantumwave/khunquant/pkg/providers/common
+github.com/cryptoquantumwave/khunquant/pkg/providers/protocoltypes
+github.com/cryptoquantumwave/khunquant/pkg/routing
+github.com/cryptoquantumwave/khunquant/pkg/session
+github.com/cryptoquantumwave/khunquant/pkg/skills
+github.com/cryptoquantumwave/khunquant/pkg/snapshot
+github.com/cryptoquantumwave/khunquant/pkg/state
+github.com/cryptoquantumwave/khunquant/pkg/ta
+github.com/cryptoquantumwave/khunquant/pkg/tokenizer
+github.com/cryptoquantumwave/khunquant/pkg/tools
+github.com/cryptoquantumwave/khunquant/pkg/utils

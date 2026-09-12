@@ -1,0 +1,42 @@
+# ============================================================
+# Stage 1: Build the khunquant binary
+# ============================================================
+# Go version pinned to match go.mod (1.26.7) for reproducible builds.
+# This ensures the builder uses exactly what CI tests.
+FROM golang:1.26.7-alpine AS builder
+
+RUN apk add --no-cache git make
+
+WORKDIR /src
+
+# Cache dependencies
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source and build
+COPY . .
+RUN make build
+
+# ============================================================
+# Stage 2: Minimal runtime image
+# ============================================================
+FROM alpine:3.24
+
+RUN apk add --no-cache ca-certificates tzdata curl
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget -q --spider http://localhost:18790/health || exit 1
+
+# Copy binary
+COPY --from=builder /src/build/khunquant /usr/local/bin/khunquant
+
+# Run onboard to create initial directories and config
+# --yes is required, not a convenience: onboard prompts for terms acceptance
+# and a credential-encryption passphrase, and a docker build has no TTY, so
+# the bare command dies with "reading passphrase: inappropriate ioctl for
+# device". The flag accepts the terms and skips encryption setup.
+RUN /usr/local/bin/khunquant onboard --yes
+
+ENTRYPOINT ["khunquant"]
+CMD ["gateway"]

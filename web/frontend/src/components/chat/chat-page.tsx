@@ -1,0 +1,220 @@
+import { IconPlus } from "@tabler/icons-react"
+import { useAtom } from "jotai"
+import { useEffect, useRef, useState } from "react"
+import { useTranslation } from "react-i18next"
+
+import { AssistantMessage } from "@/components/chat/assistant-message"
+import { ChatComposer } from "@/components/chat/chat-composer"
+import { ChatEmptyState } from "@/components/chat/chat-empty-state"
+import { ModelSelector } from "@/components/chat/model-selector"
+import { SessionHistoryMenu } from "@/components/chat/session-history-menu"
+import { TypingIndicator } from "@/components/chat/typing-indicator"
+import { UserMessage } from "@/components/chat/user-message"
+import { PageHeader } from "@/components/page-header"
+import { Button } from "@/components/ui/button"
+import { Switch } from "@/components/ui/switch"
+import { useChatModels } from "@/hooks/use-chat-models"
+import { useGateway } from "@/hooks/use-gateway"
+import { usePicoChat } from "@/hooks/use-pico-chat"
+import { useSessionHistory } from "@/hooks/use-session-history"
+import { showThoughtsAtom } from "@/store/chat"
+
+export function ChatPage() {
+  const { t } = useTranslation()
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [isAtBottom, setIsAtBottom] = useState(true)
+  const [hasScrolled, setHasScrolled] = useState(false)
+  const [input, setInput] = useState("")
+  const [showThoughts, setShowThoughts] = useAtom(showThoughtsAtom)
+
+  const {
+    messages,
+    connectionState,
+    isTyping,
+    activeSessionId,
+    contextUsage,
+    sendMessage,
+    switchSession,
+    newChat,
+  } = usePicoChat()
+
+  const { state: gwState } = useGateway()
+  const isGatewayRunning = gwState === "running"
+  const isChatConnected = connectionState === "connected"
+
+  const {
+    defaultModelName,
+    hasConfiguredModels,
+    apiKeyModels,
+    oauthModels,
+    localModels,
+    handleSetDefault,
+  } = useChatModels({ isConnected: isGatewayRunning })
+  const canSend = isChatConnected && Boolean(defaultModelName)
+
+  const {
+    sessions,
+    hasMore,
+    loadError,
+    loadErrorMessage,
+    observerRef,
+    loadSessions,
+    handleDeleteSession,
+  } = useSessionHistory({
+    activeSessionId,
+    onDeletedActiveSession: newChat,
+  })
+
+  const syncScrollState = (element: HTMLDivElement) => {
+    const { clientHeight, scrollHeight, scrollTop } = element
+    setHasScrolled(scrollTop > 0)
+    setIsAtBottom(scrollHeight - scrollTop <= clientHeight + 10)
+  }
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    syncScrollState(e.currentTarget)
+  }
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      if (isAtBottom) {
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+      }
+      syncScrollState(scrollRef.current)
+    }
+  }, [messages, isTyping, isAtBottom])
+
+  const handleSend = () => {
+    if (!input.trim() || !canSend) return
+    if (sendMessage(input.trim())) {
+      setInput("")
+    }
+  }
+
+  return (
+    <div className="bg-background/95 flex h-full flex-col">
+      <PageHeader
+        title={t("navigation.chat")}
+        className={`transition-shadow ${
+          hasScrolled ? "shadow-sm" : "shadow-none"
+        }`}
+        titleExtra={
+          hasConfiguredModels && (
+            <ModelSelector
+              defaultModelName={defaultModelName}
+              apiKeyModels={apiKeyModels}
+              oauthModels={oauthModels}
+              localModels={localModels}
+              onValueChange={handleSetDefault}
+            />
+          )
+        }
+      >
+        <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer select-none">
+          <Switch
+            checked={showThoughts}
+            onCheckedChange={setShowThoughts}
+            aria-label={t("chat.showAssistantDetails")}
+          />
+          <span className="hidden sm:inline">{t("chat.showAssistantDetails")}</span>
+        </label>
+
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={newChat}
+          className="h-9 gap-2"
+        >
+          <IconPlus className="size-4" />
+          <span className="hidden sm:inline">{t("chat.newChat")}</span>
+        </Button>
+
+        <SessionHistoryMenu
+          sessions={sessions}
+          activeSessionId={activeSessionId}
+          hasMore={hasMore}
+          loadError={loadError}
+          loadErrorMessage={loadErrorMessage}
+          observerRef={observerRef}
+          onOpenChange={(open) => {
+            if (open) {
+              void loadSessions(true)
+            }
+          }}
+          onSwitchSession={switchSession}
+          onDeleteSession={handleDeleteSession}
+        />
+      </PageHeader>
+
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="min-h-0 flex-1 overflow-y-auto px-4 py-6 [scrollbar-gutter:stable] md:px-8 lg:px-24 xl:px-48"
+      >
+        <div className="mx-auto flex w-full max-w-250 flex-col gap-8 pb-8">
+          {messages.length === 0 && !isTyping && (
+            <ChatEmptyState
+              hasConfiguredModels={hasConfiguredModels}
+              defaultModelName={defaultModelName}
+              isConnected={isGatewayRunning}
+            />
+          )}
+
+          {messages
+            .filter((msg) => {
+              if (!showThoughts && msg.role === "assistant") {
+                const kind = msg.kind ?? "normal"
+                if (kind === "thought" || kind === "tool_calls") return false
+              }
+              return true
+            })
+            .map((msg) => (
+            <div key={msg.id} className="flex w-full">
+              {msg.role === "assistant" && msg.imageDataUri ? (
+                <div className="flex w-full flex-col gap-1 py-2">
+                  <img
+                    src={msg.imageDataUri}
+                    alt={msg.imageFilename || "chart"}
+                    className="max-w-full rounded-lg border border-border/40"
+                    style={{ maxHeight: 480 }}
+                  />
+                  {msg.imageCaption && (
+                    <span className="text-muted-foreground text-xs">
+                      {msg.imageCaption}
+                    </span>
+                  )}
+                </div>
+              ) : msg.role === "assistant" ? (
+                <AssistantMessage
+                  content={msg.content}
+                  kind={msg.kind}
+                  modelName={msg.modelName}
+                  toolCalls={msg.toolCalls}
+                  timestamp={msg.timestamp}
+                />
+              ) : (
+                <UserMessage content={msg.content} />
+              )}
+            </div>
+          ))}
+
+          {isTyping && <TypingIndicator />}
+        </div>
+      </div>
+
+      <ChatComposer
+        input={input}
+        onInputChange={setInput}
+        onSend={handleSend}
+        onContextDetail={() => {
+          if (sendMessage("/context")) {
+            setInput("")
+          }
+        }}
+        isConnected={isChatConnected}
+        hasDefaultModel={Boolean(defaultModelName)}
+        contextUsage={contextUsage}
+      />
+    </div>
+  )
+}

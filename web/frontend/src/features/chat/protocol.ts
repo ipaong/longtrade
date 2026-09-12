@@ -1,0 +1,146 @@
+import { normalizeUnixTimestamp } from "@/features/chat/state"
+import { parseToolCallsValue } from "@/features/chat/tool-calls"
+import {
+  type AssistantMessageKind,
+  type ContextUsage,
+  updateChatStore,
+} from "@/store/chat"
+
+export interface PicoMessage {
+  type: string
+  id?: string
+  session_id?: string
+  timestamp?: number | string
+  payload?: Record<string, unknown>
+}
+
+function parseContextUsage(
+  payload: Record<string, unknown>,
+): ContextUsage | undefined {
+  const raw = payload.context_usage
+  if (!raw || typeof raw !== "object") return undefined
+  const obj = raw as Record<string, unknown>
+  const used = Number(obj.used_tokens)
+  const total = Number(obj.total_tokens)
+  if (!Number.isFinite(used) || !Number.isFinite(total) || total <= 0)
+    return undefined
+  return {
+    used_tokens: used,
+    total_tokens: total,
+    compress_at_tokens: Number(obj.compress_at_tokens) || 0,
+    used_percent: Number(obj.used_percent) || 0,
+  }
+}
+
+
+export function handlePicoMessage(
+  message: PicoMessage,
+  expectedSessionId: string,
+) {
+  if (message.session_id && message.session_id !== expectedSessionId) {
+    return
+  }
+
+  const payload = message.payload || {}
+
+  switch (message.type) {
+    case "message.create": {
+      const content = (payload.content as string) || ""
+      const messageId = (payload.message_id as string) || `pico-${Date.now()}`
+      const contextUsage = parseContextUsage(payload)
+      const timestamp =
+        message.timestamp !== undefined &&
+        Number.isFinite(Number(message.timestamp))
+          ? normalizeUnixTimestamp(Number(message.timestamp))
+          : Date.now()
+
+      // Reasoning / tool-call kind metadata
+      const rawKind = payload.kind as string | undefined
+      const kind: AssistantMessageKind =
+        rawKind === "thought" || rawKind === "tool_calls" ? rawKind : "normal"
+      const modelName = typeof payload.model_name === "string" ? payload.model_name : undefined
+      const toolCalls =
+        kind === "tool_calls"
+          ? parseToolCallsValue(payload.tool_calls)
+          : undefined
+
+      updateChatStore((prev) => ({
+        messages: [
+          ...prev.messages,
+          {
+            id: messageId,
+            role: "assistant",
+            content,
+            timestamp,
+            kind,
+            ...(modelName ? { modelName } : {}),
+            ...(toolCalls ? { toolCalls } : {}),
+          },
+        ],
+        isTyping: false,
+        ...(contextUsage ? { contextUsage } : {}),
+      }))
+      break
+    }
+
+    case "message.update": {
+      const content = (payload.content as string) || ""
+      const messageId = payload.message_id as string
+      if (!messageId) {
+        break
+      }
+
+      updateChatStore((prev) => ({
+        messages: prev.messages.map((msg) =>
+          msg.id === messageId ? { ...msg, content } : msg,
+        ),
+      }))
+      break
+    }
+
+    case "typing.start":
+      updateChatStore({ isTyping: true })
+      break
+
+    case "typing.stop":
+      updateChatStore({ isTyping: false })
+      break
+
+    case "media.create": {
+      const dataUri = (payload.data as string) || ""
+      const caption = (payload.caption as string) || ""
+      const filename = (payload.filename as string) || ""
+      if (!dataUri) break
+
+      updateChatStore((prev) => ({
+        messages: [
+          ...prev.messages,
+          {
+            id: `media-${Date.now()}`,
+            role: "assistant",
+            content: caption,
+            timestamp: message.timestamp !== undefined && Number.isFinite(Number(message.timestamp))
+              ? normalizeUnixTimestamp(Number(message.timestamp))
+              : Date.now(),
+            imageDataUri: dataUri,
+            imageCaption: caption,
+            imageFilename: filename,
+          },
+        ],
+        isTyping: false,
+      }))
+      break
+    }
+
+    case "error":
+      console.error("Pico error:", payload)
+      updateChatStore({ isTyping: false })
+      break
+
+    case "pong":
+      break
+
+    default:
+      console.log("Unknown pico message type:", message.type)
+  }
+}

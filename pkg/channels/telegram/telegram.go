@@ -1,0 +1,1343 @@
+package telegram
+
+import (
+	"context"
+	"fmt"
+	"html"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/mymmrac/telego"
+	th "github.com/mymmrac/telego/telegohandler"
+	tu "github.com/mymmrac/telego/telegoutil"
+
+	"github.com/cryptoquantumwave/khunquant/pkg/bus"
+	"github.com/cryptoquantumwave/khunquant/pkg/channels"
+	"github.com/cryptoquantumwave/khunquant/pkg/commands"
+	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/identity"
+	"github.com/cryptoquantumwave/khunquant/pkg/logger"
+	"github.com/cryptoquantumwave/khunquant/pkg/media"
+	"github.com/cryptoquantumwave/khunquant/pkg/pairing"
+	"github.com/cryptoquantumwave/khunquant/pkg/utils"
+)
+
+var (
+	reHeading    = regexp.MustCompile(`^#{1,6}\s+(.+)$`)
+	reBlockquote = regexp.MustCompile(`^>\s*(.*)$`)
+	reLink       = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+	reBoldStar   = regexp.MustCompile(`\*\*(.+?)\*\*`)
+	reBoldUnder  = regexp.MustCompile(`__(.+?)__`)
+	reItalic     = regexp.MustCompile(`_([^_]+)_`)
+	reStrike     = regexp.MustCompile(`~~(.+?)~~`)
+	reListItem   = regexp.MustCompile(`^[-*]\s+`)
+	reCodeBlock  = regexp.MustCompile("```[\\w]*\\n?([\\s\\S]*?)```")
+	reInlineCode = regexp.MustCompile("`([^`]+)`")
+	reRawURL     = regexp.MustCompile(`https?://[^\s<]+`)
+)
+
+type TelegramChannel struct {
+	*channels.BaseChannel
+	bot     *telego.Bot
+	bh      *th.BotHandler
+	config  *config.Config
+	chatIDs map[string]int64
+	ctx     context.Context
+	cancel  context.CancelFunc
+
+	registerFunc     func(context.Context, []commands.Definition) error
+	commandRegCancel context.CancelFunc
+}
+
+func NewTelegramChannel(cfg *config.Config, bus *bus.MessageBus) (*TelegramChannel, error) {
+	var opts []telego.BotOption
+	telegramCfg := cfg.Channels.Telegram
+
+	if telegramCfg.Proxy != "" {
+		proxyURL, parseErr := url.Parse(telegramCfg.Proxy)
+		if parseErr != nil {
+			return nil, fmt.Errorf("invalid proxy URL %q: %w", telegramCfg.Proxy, parseErr)
+		}
+		opts = append(opts, telego.WithHTTPClient(&http.Client{
+			Transport: &http.Transport{
+				Proxy: http.ProxyURL(proxyURL),
+			},
+		}))
+	} else if os.Getenv("HTTP_PROXY") != "" || os.Getenv("HTTPS_PROXY") != "" {
+		// Use environment proxy if configured
+		opts = append(opts, telego.WithHTTPClient(&http.Client{
+			Transport: &http.Transport{
+				Proxy: http.ProxyFromEnvironment,
+			},
+		}))
+	}
+
+	if baseURL := strings.TrimRight(strings.TrimSpace(telegramCfg.BaseURL), "/"); baseURL != "" {
+		opts = append(opts, telego.WithAPIServer(baseURL))
+	}
+	opts = append(opts, telego.WithLogger(logger.NewLogger("telego")))
+
+	bot, err := telego.NewBot(telegramCfg.Token.String(), opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create telegram bot: %w", err)
+	}
+
+	base := channels.NewBaseChannel(
+		"telegram",
+		telegramCfg,
+		bus,
+		telegramCfg.AllowFrom,
+		channels.WithMaxMessageLength(4000),
+		channels.WithGroupTrigger(telegramCfg.GroupTrigger),
+		channels.WithReasoningChannelID(telegramCfg.ReasoningChannelID),
+	)
+
+	return &TelegramChannel{
+		BaseChannel: base,
+		bot:         bot,
+		config:      cfg,
+		chatIDs:     make(map[string]int64),
+	}, nil
+}
+
+func (c *TelegramChannel) Start(ctx context.Context) error {
+	logger.InfoC("telegram", "Starting Telegram bot (polling mode)...")
+
+	c.ctx, c.cancel = context.WithCancel(ctx)
+
+	// proxyUpdates is a persistent channel fed by runPollingWithBackoff.
+	// BotHandler stays connected to it across reconnections.
+	proxyUpdates := make(chan telego.Update, 100)
+
+	bh, err := th.NewBotHandler(c.bot, proxyUpdates)
+	if err != nil {
+		c.cancel()
+		return fmt.Errorf("failed to create bot handler: %w", err)
+	}
+	c.bh = bh
+
+	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
+		return c.handleMessage(ctx, &message)
+	}, th.AnyMessage())
+
+	c.SetRunning(true)
+	logger.InfoCF("telegram", "Telegram bot connected", map[string]any{
+		"username": c.bot.Username(),
+	})
+
+	c.startCommandRegistration(c.ctx, commands.BuiltinDefinitions())
+
+	go c.runPollingWithBackoff(c.ctx, proxyUpdates)
+
+	go func() {
+		if err = bh.Start(); err != nil {
+			logger.ErrorCF("telegram", "Bot handler failed", map[string]any{
+				"error": err.Error(),
+			})
+		}
+	}()
+
+	return nil
+}
+
+// runPollingWithBackoff starts long polling and forwards updates to proxyUpdates.
+// On connection failure it retries with exponential backoff starting at 8s, capped at 30 minutes.
+// It resets the delay when the connection was healthy (at least one update received).
+func (c *TelegramChannel) runPollingWithBackoff(ctx context.Context, proxyUpdates chan<- telego.Update) {
+	defer close(proxyUpdates)
+
+	const (
+		initialDelay = 8 * time.Second
+		maxDelay     = 30 * time.Minute
+	)
+	delay := initialDelay
+
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+
+		// retryTimeout=0 disables telego's built-in fixed retry so the channel
+		// closes immediately on error, giving us full control over backoff.
+		updates, err := c.bot.UpdatesViaLongPolling(ctx, &telego.GetUpdatesParams{
+			Timeout: 30,
+		}, telego.WithLongPollingRetryTimeout(0))
+
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			logger.ErrorCF("telegram", "Failed to start long polling, retrying", map[string]any{
+				"error": err.Error(), "retry_in": delay.String(),
+			})
+		} else {
+			receivedAny := false
+			for update := range updates {
+				receivedAny = true
+				select {
+				case <-ctx.Done():
+					return
+				case proxyUpdates <- update:
+				}
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			if receivedAny {
+				delay = initialDelay
+			}
+			logger.ErrorCF("telegram", "Long polling connection dropped, retrying", map[string]any{
+				"retry_in": delay.String(),
+			})
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+
+		delay *= 2
+		if delay > maxDelay {
+			delay = maxDelay
+		}
+	}
+}
+
+func (c *TelegramChannel) Stop(ctx context.Context) error {
+	logger.InfoC("telegram", "Stopping Telegram bot...")
+	c.SetRunning(false)
+
+	// Stop the bot handler
+	if c.bh != nil {
+		_ = c.bh.StopWithContext(ctx)
+	}
+
+	// Cancel our context (stops long polling)
+	if c.cancel != nil {
+		c.cancel()
+	}
+	if c.commandRegCancel != nil {
+		c.commandRegCancel()
+	}
+
+	return nil
+}
+
+func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
+	if !c.IsRunning() {
+		return channels.ErrNotRunning
+	}
+
+	chatID, threadID, err := parseTelegramChatID(msg.ChatID)
+	if err != nil {
+		return fmt.Errorf("invalid chat ID %s: %w", msg.ChatID, channels.ErrSendFailed)
+	}
+
+	if msg.Content == "" {
+		return nil
+	}
+
+	// The Manager already splits messages to ≤4000 chars (WithMaxMessageLength),
+	// so msg.Content is guaranteed to be within that limit. We still need to
+	// check if HTML expansion pushes it beyond Telegram's 4096-char API limit.
+	replyToID := msg.ReplyToMessageID
+	queue := []string{msg.Content}
+	for len(queue) > 0 {
+		chunk := queue[0]
+		queue = queue[1:]
+
+		htmlContent := markdownToTelegramHTML(chunk)
+
+		if len([]rune(htmlContent)) > 4096 {
+			runeChunk := []rune(chunk)
+			ratio := float64(len(runeChunk)) / float64(len([]rune(htmlContent)))
+			smallerLen := int(float64(4096) * ratio * 0.95) // 5% safety margin
+
+			// Guarantee progress: if estimated length is >= chunk length, force it smaller
+			if smallerLen >= len(runeChunk) {
+				smallerLen = len(runeChunk) - 1
+			}
+
+			if smallerLen <= 0 {
+				if err := c.sendHTMLChunk(ctx, chatID, threadID, htmlContent, chunk, replyToID); err != nil {
+					return err
+				}
+				replyToID = ""
+				continue
+			}
+
+			// Use the estimated smaller length as a guide for SplitMessage.
+			// SplitMessage will find natural break points (newlines/spaces) and respect code blocks.
+			subChunks := channels.SplitMessage(chunk, smallerLen)
+
+			// Safety fallback: If SplitMessage failed to shorten the chunk, force a manual hard split.
+			if len(subChunks) == 1 && subChunks[0] == chunk {
+				part1 := string(runeChunk[:smallerLen])
+				part2 := string(runeChunk[smallerLen:])
+				subChunks = []string{part1, part2}
+			}
+
+			// Filter out empty chunks to avoid sending empty messages to Telegram.
+			nonEmpty := make([]string, 0, len(subChunks))
+			for _, s := range subChunks {
+				if s != "" {
+					nonEmpty = append(nonEmpty, s)
+				}
+			}
+
+			// Push sub-chunks back to the front of the queue
+			queue = append(nonEmpty, queue...)
+			continue
+		}
+
+		if err := c.sendHTMLChunk(ctx, chatID, threadID, htmlContent, chunk, replyToID); err != nil {
+			return err
+		}
+		// Only the first chunk should be a reply; subsequent chunks are normal messages.
+		replyToID = ""
+	}
+
+	return nil
+}
+
+// sendHTMLChunk sends a single HTML message, falling back to the original
+// markdown as plain text on parse failure so users never see raw HTML tags.
+func (c *TelegramChannel) sendHTMLChunk(
+	ctx context.Context, chatID int64, threadID int, htmlContent, mdFallback string, replyToID string,
+) error {
+	tgMsg := tu.Message(tu.ID(chatID), htmlContent)
+	tgMsg.ParseMode = telego.ModeHTML
+	tgMsg.MessageThreadID = threadID
+
+	if replyToID != "" {
+		if mid, parseErr := strconv.Atoi(replyToID); parseErr == nil {
+			tgMsg.ReplyParameters = &telego.ReplyParameters{
+				MessageID: mid,
+			}
+		}
+	}
+
+	if _, err := c.bot.SendMessage(ctx, tgMsg); err != nil {
+		logger.ErrorCF("telegram", "HTML parse failed, falling back to plain text", map[string]any{
+			"error": err.Error(),
+		})
+		tgMsg.Text = mdFallback
+		tgMsg.ParseMode = ""
+		if _, err = c.bot.SendMessage(ctx, tgMsg); err != nil {
+			return fmt.Errorf("telegram send: %w", channels.ErrTemporary)
+		}
+	}
+	return nil
+}
+
+// maxTypingDuration limits how long the typing indicator can run.
+// Prevents endless typing when the LLM fails/hangs and preSend never invokes cancel.
+// Matches channels.Manager's typingStopTTL (5 min) so behavior is consistent.
+const maxTypingDuration = 5 * time.Minute
+
+// StartTyping implements channels.TypingCapable.
+// It sends ChatAction(typing) immediately and then repeats every 4 seconds
+// (Telegram's typing indicator expires after ~5s) in a background goroutine.
+// The returned stop function is idempotent and cancels the goroutine.
+// The goroutine also exits automatically after maxTypingDuration if cancel is
+// never called (e.g. when the LLM fails or times out without publishing).
+func (c *TelegramChannel) StartTyping(ctx context.Context, chatID string) (func(), error) {
+	cid, threadID, err := parseTelegramChatID(chatID)
+	if err != nil {
+		return func() {}, err
+	}
+
+	action := tu.ChatAction(tu.ID(cid), telego.ChatActionTyping)
+	action.MessageThreadID = threadID
+
+	// Send the first typing action immediately
+	_ = c.bot.SendChatAction(ctx, action)
+
+	typingCtx, cancel := context.WithCancel(ctx)
+	// Cap lifetime so the goroutine cannot run indefinitely if cancel is never called
+	maxCtx, maxCancel := context.WithTimeout(typingCtx, maxTypingDuration)
+	go func() {
+		defer maxCancel()
+		ticker := time.NewTicker(4 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-maxCtx.Done():
+				return
+			case <-ticker.C:
+				a := tu.ChatAction(tu.ID(cid), telego.ChatActionTyping)
+				a.MessageThreadID = threadID
+				_ = c.bot.SendChatAction(typingCtx, a)
+			}
+		}
+	}()
+
+	return cancel, nil
+}
+
+// EditMessage implements channels.MessageEditor.
+func (c *TelegramChannel) EditMessage(ctx context.Context, chatID string, messageID string, content string) error {
+	cid, _, err := parseTelegramChatID(chatID)
+	if err != nil {
+		return err
+	}
+	mid, err := strconv.Atoi(messageID)
+	if err != nil {
+		return err
+	}
+	htmlContent := markdownToTelegramHTML(content)
+	editMsg := tu.EditMessageText(tu.ID(cid), mid, htmlContent)
+	editMsg.ParseMode = telego.ModeHTML
+	_, err = c.bot.EditMessageText(ctx, editMsg)
+	return err
+}
+
+// SendPlaceholder implements channels.PlaceholderCapable.
+// It sends a placeholder message (e.g. "Thinking... 💭") that will later be
+// edited to the actual response via EditMessage (channels.MessageEditor).
+func (c *TelegramChannel) SendPlaceholder(ctx context.Context, chatID string) (string, error) {
+	phCfg := c.config.Channels.Telegram.Placeholder
+	if !phCfg.Enabled {
+		return "", nil
+	}
+
+	text := phCfg.Text
+	if text == "" {
+		text = "Thinking... 💭"
+	}
+
+	cid, threadID, err := parseTelegramChatID(chatID)
+	if err != nil {
+		return "", err
+	}
+
+	phMsg := tu.Message(tu.ID(cid), text)
+	phMsg.MessageThreadID = threadID
+	pMsg, err := c.bot.SendMessage(ctx, phMsg)
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("%d", pMsg.MessageID), nil
+}
+
+// SendMedia implements the channels.MediaSender interface.
+func (c *TelegramChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) error {
+	if !c.IsRunning() {
+		return channels.ErrNotRunning
+	}
+
+	chatID, threadID, err := parseTelegramChatID(msg.ChatID)
+	if err != nil {
+		return fmt.Errorf("invalid chat ID %s: %w", msg.ChatID, channels.ErrSendFailed)
+	}
+
+	store := c.GetMediaStore()
+	if store == nil {
+		return fmt.Errorf("no media store available: %w", channels.ErrSendFailed)
+	}
+
+	for _, part := range msg.Parts {
+		localPath, err := store.Resolve(part.Ref)
+		if err != nil {
+			logger.ErrorCF("telegram", "Failed to resolve media ref", map[string]any{
+				"ref":   part.Ref,
+				"error": err.Error(),
+			})
+			continue
+		}
+
+		file, err := os.Open(localPath)
+		if err != nil {
+			logger.ErrorCF("telegram", "Failed to open media file", map[string]any{
+				"path":  localPath,
+				"error": err.Error(),
+			})
+			continue
+		}
+
+		switch part.Type {
+		case "image":
+			if shouldSendTelegramImageAsDocument(part, localPath) {
+				docParams := &telego.SendDocumentParams{
+					ChatID:          tu.ID(chatID),
+					MessageThreadID: threadID,
+					Document:        telego.InputFile{File: file},
+					Caption:         part.Caption,
+				}
+				_, err = c.bot.SendDocument(ctx, docParams)
+				break
+			}
+
+			params := &telego.SendPhotoParams{
+				ChatID:          tu.ID(chatID),
+				MessageThreadID: threadID,
+				Photo:           telego.InputFile{File: file},
+				Caption:         part.Caption,
+			}
+			_, err = c.bot.SendPhoto(ctx, params)
+			if err != nil && shouldFallbackTelegramPhotoToDocument(err) {
+				if _, seekErr := file.Seek(0, io.SeekStart); seekErr != nil {
+					file.Close()
+					return fmt.Errorf("telegram rewind media after photo failure: %w", channels.ErrTemporary)
+				}
+
+				docParams := &telego.SendDocumentParams{
+					ChatID:          tu.ID(chatID),
+					MessageThreadID: threadID,
+					Document:        telego.InputFile{File: file},
+					Caption:         part.Caption,
+				}
+				_, err = c.bot.SendDocument(ctx, docParams)
+			}
+		case "audio":
+			params := &telego.SendAudioParams{
+				ChatID:          tu.ID(chatID),
+				MessageThreadID: threadID,
+				Audio:           telego.InputFile{File: file},
+				Caption:         part.Caption,
+			}
+			_, err = c.bot.SendAudio(ctx, params)
+		case "video":
+			params := &telego.SendVideoParams{
+				ChatID:          tu.ID(chatID),
+				MessageThreadID: threadID,
+				Video:           telego.InputFile{File: file},
+				Caption:         part.Caption,
+			}
+			_, err = c.bot.SendVideo(ctx, params)
+		default: // "file" or unknown types
+			params := &telego.SendDocumentParams{
+				ChatID:          tu.ID(chatID),
+				MessageThreadID: threadID,
+				Document:        telego.InputFile{File: file},
+				Caption:         part.Caption,
+			}
+			_, err = c.bot.SendDocument(ctx, params)
+		}
+
+		file.Close()
+
+		if err != nil {
+			logger.ErrorCF("telegram", "Failed to send media", map[string]any{
+				"type":  part.Type,
+				"error": err.Error(),
+			})
+			return fmt.Errorf("telegram send media: %w", channels.ErrTemporary)
+		}
+	}
+
+	return nil
+}
+
+func shouldSendTelegramImageAsDocument(part bus.MediaPart, localPath string) bool {
+	contentType := strings.ToLower(strings.TrimSpace(part.ContentType))
+	filename := strings.ToLower(strings.TrimSpace(part.Filename))
+	ext := strings.ToLower(filepath.Ext(filename))
+	if ext == "" {
+		ext = strings.ToLower(filepath.Ext(localPath))
+	}
+
+	return contentType == "image/svg+xml" || ext == ".svg"
+}
+
+func shouldFallbackTelegramPhotoToDocument(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "PHOTO_INVALID_DIMENSIONS") ||
+		strings.Contains(msg, "IMAGE_PROCESS_FAILED")
+}
+
+func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Message) error {
+	if message == nil {
+		return fmt.Errorf("message is nil")
+	}
+
+	user := message.From
+	if user == nil {
+		return fmt.Errorf("message sender (user) is nil")
+	}
+
+	platformID := fmt.Sprintf("%d", user.ID)
+	sender := bus.SenderInfo{
+		Platform:    "telegram",
+		PlatformID:  platformID,
+		CanonicalID: identity.BuildCanonicalID("telegram", platformID),
+		Username:    user.Username,
+		DisplayName: user.FirstName,
+	}
+
+	// /pair command is handled before any allowlist check so both unknown and
+	// approved users can run it in private chats.
+	if message.Chat.Type == "private" && isPairCommand(message.Text) {
+		c.handlePairCommand(ctx, message, sender)
+		return nil
+	}
+
+	// check allowlist to avoid downloading attachments for rejected users.
+	// When pairing is enabled for private chats, use a strict check where an empty
+	// allow_from list means "no one approved yet" (deny-all), not "allow everyone".
+	isPairingDM := message.Chat.Type == "private" && c.config.Channels.Telegram.PairingEnabled
+	allowed := false
+	if isPairingDM {
+		// Strict allowlist: empty = deny all. Read from live config so we use
+		// the latest allow_from without requiring a code restart for the check.
+		for _, id := range c.config.Channels.Telegram.AllowFrom {
+			if identity.MatchAllowed(sender, id) {
+				allowed = true
+				break
+			}
+		}
+	} else {
+		allowed = c.IsAllowedSender(sender)
+	}
+
+	if !allowed {
+		if isPairingDM {
+			c.handlePairingRequest(ctx, message, sender)
+		} else {
+			logger.DebugCF("telegram", "Message rejected by allowlist", map[string]any{
+				"user_id": platformID,
+			})
+		}
+		return nil
+	}
+
+	chatID := message.Chat.ID
+	c.chatIDs[platformID] = chatID
+
+	content := ""
+	mediaPaths := []string{}
+
+	chatIDStr := fmt.Sprintf("%d", chatID)
+	messageIDStr := fmt.Sprintf("%d", message.MessageID)
+	scope := channels.BuildMediaScope("telegram", chatIDStr, messageIDStr)
+
+	// Helper to register a local file with the media store
+	storeMedia := func(localPath, filename string) string {
+		if store := c.GetMediaStore(); store != nil {
+			ref, err := store.Store(localPath, media.MediaMeta{
+				Filename: filename,
+				Source:   "telegram",
+			}, scope)
+			if err == nil {
+				return ref
+			}
+		}
+		return localPath // fallback: use raw path
+	}
+
+	if message.Text != "" {
+		content += message.Text
+	}
+
+	if message.Caption != "" {
+		if content != "" {
+			content += "\n"
+		}
+		content += message.Caption
+	}
+
+	if message.Location != nil {
+		if content != "" {
+			content += "\n"
+		}
+		content += fmt.Sprintf(
+			"[User location: lat=%.6f, lng=%.6f]",
+			message.Location.Latitude,
+			message.Location.Longitude,
+		)
+	}
+
+	if len(message.Photo) > 0 {
+		photo := message.Photo[len(message.Photo)-1]
+		photoPath := c.downloadPhoto(ctx, photo.FileID)
+		if photoPath != "" {
+			mediaPaths = append(mediaPaths, storeMedia(photoPath, "photo.jpg"))
+			if content != "" {
+				content += "\n"
+			}
+			content += "[image: photo]"
+		}
+	}
+
+	if message.Voice != nil {
+		voicePath := c.downloadFile(ctx, message.Voice.FileID, ".ogg")
+		if voicePath != "" {
+			mediaPaths = append(
+				mediaPaths,
+				storeMedia(voicePath, "voice.ogg"),
+			)
+
+			if content != "" {
+				content += "\n"
+			}
+			content += "[voice]"
+		}
+	}
+
+	if message.Audio != nil {
+		audioPath := c.downloadFile(ctx, message.Audio.FileID, ".mp3")
+		if audioPath != "" {
+			mediaPaths = append(mediaPaths, storeMedia(audioPath, "audio.mp3"))
+			if content != "" {
+				content += "\n"
+			}
+			content += "[audio]"
+		}
+	}
+
+	if message.Document != nil {
+		docPath := c.downloadFile(ctx, message.Document.FileID, "")
+		if docPath != "" {
+			mediaPaths = append(mediaPaths, storeMedia(docPath, "document"))
+			if content != "" {
+				content += "\n"
+			}
+			content += "[file]"
+		}
+	}
+
+	// Prepend the quoted message before the empty check: a bare "yes" replying
+	// to something is meaningful, and would otherwise be dropped here as empty.
+	if message.ReplyToMessage != nil {
+		quotedMedia := quotedTelegramMediaRefs(
+			message.ReplyToMessage,
+			func(fileID, ext, filename string) string {
+				localPath := c.downloadFile(ctx, fileID, ext)
+				if localPath == "" {
+					return ""
+				}
+				return storeMedia(localPath, filename)
+			},
+		)
+		if len(quotedMedia) > 0 {
+			// Quoted media leads: it is the thing being referred to.
+			mediaPaths = append(quotedMedia, mediaPaths...)
+		}
+		content = c.prependTelegramQuotedReply(content, message.ReplyToMessage)
+	}
+
+	if content == "" && len(mediaPaths) == 0 {
+		return nil
+	}
+
+	if content == "" {
+		content = "[media only]"
+	}
+
+	// In group chats, apply unified group trigger filtering
+	if message.Chat.Type != "private" {
+		isMentioned := c.isBotMentioned(message)
+		if isMentioned {
+			content = c.stripBotMention(content)
+		}
+		respond, cleaned := c.ShouldRespondInGroup(isMentioned, content)
+		if !respond {
+			return nil
+		}
+		content = cleaned
+	}
+
+	// For forum topics, embed the thread ID as "chatID/threadID" so replies
+	// route to the correct topic and each topic gets its own session.
+	// Only forum groups (IsForum) are handled; regular group reply threads
+	// must share one session per group.
+	compositeChatID := fmt.Sprintf("%d", chatID)
+	threadID := message.MessageThreadID
+	if message.Chat.IsForum && threadID != 0 {
+		compositeChatID = fmt.Sprintf("%d/%d", chatID, threadID)
+	}
+
+	logger.DebugCF("telegram", "Received message", map[string]any{
+		"sender_id": sender.CanonicalID,
+		"chat_id":   compositeChatID,
+		"thread_id": threadID,
+		"preview":   utils.Truncate(content, 50),
+	})
+
+	peerKind := "direct"
+	peerID := fmt.Sprintf("%d", user.ID)
+	if message.Chat.Type != "private" {
+		peerKind = "group"
+		peerID = compositeChatID
+	}
+
+	peer := bus.Peer{Kind: peerKind, ID: peerID}
+	messageID := fmt.Sprintf("%d", message.MessageID)
+
+	metadata := map[string]string{
+		"user_id":    fmt.Sprintf("%d", user.ID),
+		"username":   user.Username,
+		"first_name": user.FirstName,
+		"is_group":   fmt.Sprintf("%t", message.Chat.Type != "private"),
+	}
+
+	if message.ReplyToMessage != nil {
+		metadata["reply_to_message_id"] = fmt.Sprintf("%d", message.ReplyToMessage.MessageID)
+	}
+
+	// Set parent_peer metadata for per-topic agent binding.
+	if message.Chat.IsForum && threadID != 0 {
+		metadata["parent_peer_kind"] = "topic"
+		metadata["parent_peer_id"] = fmt.Sprintf("%d", threadID)
+	}
+
+	c.HandleMessage(c.ctx,
+		peer,
+		messageID,
+		platformID,
+		compositeChatID,
+		content,
+		mediaPaths,
+		metadata,
+		sender,
+	)
+	return nil
+}
+
+// isPairCommand returns true if the message text is the /pair command.
+func isPairCommand(text string) bool {
+	t := strings.TrimSpace(text)
+	// Match "/pair", "/pair@botname", "/pair some args"
+	if !strings.HasPrefix(t, "/pair") {
+		return false
+	}
+	rest := t[len("/pair"):]
+	return rest == "" || rest[0] == ' ' || rest[0] == '@'
+}
+
+// handlePairCommand handles the /pair command for both approved and unknown users.
+// Approved users receive a confirmation; unknown users receive their pairing code.
+func (c *TelegramChannel) handlePairCommand(ctx context.Context, message *telego.Message, sender bus.SenderInfo) {
+	// Check if sender is already approved (strict: empty list = not approved).
+	approved := false
+	for _, id := range c.config.Channels.Telegram.AllowFrom {
+		if identity.MatchAllowed(sender, id) {
+			approved = true
+			break
+		}
+	}
+
+	if approved {
+		msg := tu.Message(tu.ID(message.Chat.ID), "You are already authorized. ✅")
+		if _, err := c.bot.SendMessage(ctx, msg); err != nil {
+			logger.ErrorCF("telegram", "Failed to send pair confirmation", map[string]any{"error": err.Error()})
+		}
+		return
+	}
+
+	if !c.config.Channels.Telegram.PairingEnabled {
+		logger.DebugCF("telegram", "/pair used but pairing is disabled", map[string]any{
+			"user_id": sender.PlatformID,
+		})
+		return
+	}
+
+	c.handlePairingRequest(ctx, message, sender)
+}
+
+// handlePairingRequest generates (or retrieves) a pairing code for an unknown
+// Telegram DM sender and replies with instructions for the bot owner to approve.
+func (c *TelegramChannel) handlePairingRequest(ctx context.Context, message *telego.Message, sender bus.SenderInfo) {
+	storePath := filepath.Join(c.config.WorkspacePath(), "pairing", "requests.json")
+	store := pairing.NewStore(storePath)
+
+	req, isNew, err := store.Upsert(
+		"telegram",
+		sender.PlatformID,
+		sender.Username,
+		sender.DisplayName,
+		message.Chat.ID,
+	)
+	if err != nil {
+		logger.ErrorCF("telegram", "Failed to upsert pairing request", map[string]any{
+			"user_id": sender.PlatformID,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	logger.InfoCF("telegram", "Pairing request", map[string]any{
+		"user_id": sender.PlatformID,
+		"code":    req.Code,
+		"is_new":  isNew,
+	})
+
+	text := fmt.Sprintf(
+		"Access not configured.\n\nYour pairing code: <code>%s</code>\n\nShare this code with the bot owner to request access. The code expires in 2 hours.",
+		req.Code,
+	)
+	msg := tu.Message(tu.ID(message.Chat.ID), text)
+	msg.ParseMode = telego.ModeHTML
+	if _, err := c.bot.SendMessage(ctx, msg); err != nil {
+		logger.ErrorCF("telegram", "Failed to send pairing code message", map[string]any{
+			"error": err.Error(),
+		})
+	}
+}
+
+func (c *TelegramChannel) downloadPhoto(ctx context.Context, fileID string) string {
+	file, err := c.bot.GetFile(ctx, &telego.GetFileParams{FileID: fileID})
+	if err != nil {
+		logger.ErrorCF("telegram", "Failed to get photo file", map[string]any{
+			"error": err.Error(),
+		})
+		return ""
+	}
+
+	return c.downloadFileWithInfo(file, ".jpg")
+}
+
+func (c *TelegramChannel) downloadFileWithInfo(file *telego.File, ext string) string {
+	if file.FilePath == "" {
+		return ""
+	}
+
+	url := c.bot.FileDownloadURL(file.FilePath)
+	logger.DebugCF("telegram", "File URL", map[string]any{"url": url})
+
+	// Use FilePath as filename for better identification
+	filename := file.FilePath + ext
+	return utils.DownloadFile(url, filename, utils.DownloadOptions{
+		LoggerPrefix: "telegram",
+	})
+}
+
+func (c *TelegramChannel) downloadFile(ctx context.Context, fileID, ext string) string {
+	file, err := c.bot.GetFile(ctx, &telego.GetFileParams{FileID: fileID})
+	if err != nil {
+		logger.ErrorCF("telegram", "Failed to get file", map[string]any{
+			"error": err.Error(),
+		})
+		return ""
+	}
+
+	return c.downloadFileWithInfo(file, ext)
+}
+
+// parseTelegramChatID splits "chatID/threadID" into its components.
+// Returns threadID=0 when no "/" is present (non-forum messages).
+func parseTelegramChatID(chatID string) (int64, int, error) {
+	idx := strings.Index(chatID, "/")
+	if idx == -1 {
+		cid, err := strconv.ParseInt(chatID, 10, 64)
+		return cid, 0, err
+	}
+	cid, err := strconv.ParseInt(chatID[:idx], 10, 64)
+	if err != nil {
+		return 0, 0, err
+	}
+	tid, err := strconv.Atoi(chatID[idx+1:])
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid thread ID in chat ID %q: %w", chatID, err)
+	}
+	return cid, tid, nil
+}
+
+func markdownToTelegramHTML(text string) string {
+	if text == "" {
+		return ""
+	}
+
+	codeBlocks := extractCodeBlocks(text)
+	text = codeBlocks.text
+
+	inlineCodes := extractInlineCodes(text)
+	text = inlineCodes.text
+
+	text = reHeading.ReplaceAllString(text, "$1")
+
+	text = reBlockquote.ReplaceAllString(text, "$1")
+
+	// Extract markdown links and raw URLs to placeholders BEFORE markdown
+	// processing so bold/italic regexes cannot corrupt URL characters (e.g.
+	// underscores in OAuth query params). Links first, so URLs inside
+	// [label](url) are not double-captured as raw URLs (upstream 34b9d5d6f).
+	links := extractLinks(text)
+	text = links.text
+
+	rawURLs := extractRawURLs(text)
+	text = rawURLs.text
+
+	text = escapeHTML(text)
+
+	text = reBoldStar.ReplaceAllString(text, "<b>$1</b>")
+
+	text = reBoldUnder.ReplaceAllString(text, "<b>$1</b>")
+
+	text = reItalic.ReplaceAllStringFunc(text, func(s string) string {
+		match := reItalic.FindStringSubmatch(s)
+		if len(match) < 2 {
+			return s
+		}
+		return "<i>" + match[1] + "</i>"
+	})
+
+	text = reStrike.ReplaceAllString(text, "<s>$1</s>")
+
+	text = reListItem.ReplaceAllString(text, "• ")
+
+	for i, lnk := range links.links {
+		label := escapeHTML(lnk[0])
+		url := escapeHTMLAttr(lnk[1])
+		text = strings.ReplaceAll(text, fmt.Sprintf("\x00LK%d\x00", i), fmt.Sprintf(`<a href="%s">%s</a>`, url, label))
+	}
+
+	for i, rawURL := range rawURLs.urls {
+		escaped := escapeHTML(rawURL)
+		text = strings.ReplaceAll(
+			text,
+			fmt.Sprintf("\x00RU%d\x00", i),
+			fmt.Sprintf(`<a href="%s">%s</a>`, escapeHTMLAttr(rawURL), escaped),
+		)
+	}
+
+	for i, code := range inlineCodes.codes {
+		escaped := escapeHTML(code)
+		text = strings.ReplaceAll(text, fmt.Sprintf("\x00IC%d\x00", i), fmt.Sprintf("<code>%s</code>", escaped))
+	}
+
+	for i, code := range codeBlocks.codes {
+		escaped := escapeHTML(code)
+		text = strings.ReplaceAll(
+			text,
+			fmt.Sprintf("\x00CB%d\x00", i),
+			fmt.Sprintf("<pre><code>%s</code></pre>", escaped),
+		)
+	}
+
+	return text
+}
+
+type codeBlockMatch struct {
+	text  string
+	codes []string
+}
+
+func extractCodeBlocks(text string) codeBlockMatch {
+	matches := reCodeBlock.FindAllStringSubmatch(text, -1)
+
+	codes := make([]string, 0, len(matches))
+	for _, match := range matches {
+		codes = append(codes, match[1])
+	}
+
+	i := 0
+	text = reCodeBlock.ReplaceAllStringFunc(text, func(m string) string {
+		placeholder := fmt.Sprintf("\x00CB%d\x00", i)
+		i++
+		return placeholder
+	})
+
+	return codeBlockMatch{text: text, codes: codes}
+}
+
+type inlineCodeMatch struct {
+	text  string
+	codes []string
+}
+
+func extractInlineCodes(text string) inlineCodeMatch {
+	matches := reInlineCode.FindAllStringSubmatch(text, -1)
+
+	codes := make([]string, 0, len(matches))
+	for _, match := range matches {
+		codes = append(codes, match[1])
+	}
+
+	i := 0
+	text = reInlineCode.ReplaceAllStringFunc(text, func(m string) string {
+		placeholder := fmt.Sprintf("\x00IC%d\x00", i)
+		i++
+		return placeholder
+	})
+
+	return inlineCodeMatch{text: text, codes: codes}
+}
+
+func escapeHTML(text string) string {
+	text = strings.ReplaceAll(text, "&", "&amp;")
+	text = strings.ReplaceAll(text, "<", "&lt;")
+	text = strings.ReplaceAll(text, ">", "&gt;")
+	return text
+}
+
+// escapeHTMLAttr escapes a string for safe use inside an HTML attribute value
+// (e.g. an <a href="..."> URL), including quotes that escapeHTML leaves intact.
+func escapeHTMLAttr(text string) string {
+	return html.EscapeString(text)
+}
+
+type linkMatch struct {
+	text  string
+	links [][2]string // [label, url]
+}
+
+// extractLinks replaces markdown links [label](url) with \x00LK%d\x00 placeholders
+// so later markdown/escape passes cannot corrupt the URL; the originals are
+// restored (with the URL HTML-attr-escaped) after formatting.
+func extractLinks(text string) linkMatch {
+	matches := reLink.FindAllStringSubmatch(text, -1)
+
+	extracted := make([][2]string, 0, len(matches))
+	for _, match := range matches {
+		extracted = append(extracted, [2]string{match[1], match[2]})
+	}
+
+	i := 0
+	text = reLink.ReplaceAllStringFunc(text, func(m string) string {
+		placeholder := fmt.Sprintf("\x00LK%d\x00", i)
+		i++
+		return placeholder
+	})
+
+	return linkMatch{text: text, links: extracted}
+}
+
+type rawURLMatch struct {
+	text string
+	urls []string
+}
+
+// extractRawURLs replaces bare http(s) URLs with \x00RU%d\x00 placeholders so
+// markdown formatting does not mangle URL characters (e.g. underscores in OAuth
+// query params); restored as clickable links afterwards.
+func extractRawURLs(text string) rawURLMatch {
+	matches := reRawURL.FindAllString(text, -1)
+
+	urls := make([]string, 0, len(matches))
+	urls = append(urls, matches...)
+
+	i := 0
+	text = reRawURL.ReplaceAllStringFunc(text, func(string) string {
+		placeholder := fmt.Sprintf("\x00RU%d\x00", i)
+		i++
+		return placeholder
+	})
+
+	return rawURLMatch{text: text, urls: urls}
+}
+
+// isBotMentioned checks if the bot is mentioned in the message via entities.
+func (c *TelegramChannel) isBotMentioned(message *telego.Message) bool {
+	text, entities := telegramEntityTextAndList(message)
+	if text == "" || len(entities) == 0 {
+		return false
+	}
+
+	botUsername := ""
+	if c.bot != nil {
+		botUsername = c.bot.Username()
+	}
+	runes := []rune(text)
+
+	for _, entity := range entities {
+		entityText, ok := telegramEntityText(runes, entity)
+		if !ok {
+			continue
+		}
+
+		switch entity.Type {
+		case telego.EntityTypeMention:
+			if botUsername != "" && strings.EqualFold(entityText, "@"+botUsername) {
+				return true
+			}
+		case telego.EntityTypeTextMention:
+			if botUsername != "" && entity.User != nil && strings.EqualFold(entity.User.Username, botUsername) {
+				return true
+			}
+		case telego.EntityTypeBotCommand:
+			if isBotCommandEntityForThisBot(entityText, botUsername) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func telegramEntityTextAndList(message *telego.Message) (string, []telego.MessageEntity) {
+	if message.Text != "" {
+		return message.Text, message.Entities
+	}
+	return message.Caption, message.CaptionEntities
+}
+
+func telegramEntityText(runes []rune, entity telego.MessageEntity) (string, bool) {
+	if entity.Offset < 0 || entity.Length <= 0 {
+		return "", false
+	}
+	end := entity.Offset + entity.Length
+	if entity.Offset >= len(runes) || end > len(runes) {
+		return "", false
+	}
+	return string(runes[entity.Offset:end]), true
+}
+
+func isBotCommandEntityForThisBot(entityText, botUsername string) bool {
+	if !strings.HasPrefix(entityText, "/") {
+		return false
+	}
+	command := strings.TrimPrefix(entityText, "/")
+	if command == "" {
+		return false
+	}
+
+	at := strings.IndexRune(command, '@')
+	if at == -1 {
+		// A bare /command delivered to this bot is intended for this bot.
+		return true
+	}
+
+	mentionUsername := command[at+1:]
+	if mentionUsername == "" || botUsername == "" {
+		return false
+	}
+	return strings.EqualFold(mentionUsername, botUsername)
+}
+
+// stripBotMention removes the @bot mention from the content.
+func (c *TelegramChannel) stripBotMention(content string) string {
+	botUsername := c.bot.Username()
+	if botUsername == "" {
+		return content
+	}
+	// Case-insensitive replacement
+	re := regexp.MustCompile(`(?i)@` + regexp.QuoteMeta(botUsername))
+	content = re.ReplaceAllString(content, "")
+	return strings.TrimSpace(content)
+}
+
+// --- Quoted replies -------------------------------------------------------
+//
+// A Telegram reply carries the message it answers, but without this the agent
+// saw only the new text. "yes, do that" with no idea what "that" was is not a
+// prompt anything can act on. The quoted message is prepended as labelled
+// context, and any audio it carried is attached so the agent can hear what is
+// being referred to rather than only being told it exists.
+
+func (c *TelegramChannel) prependTelegramQuotedReply(content string, reply *telego.Message) string {
+	quoted := strings.TrimSpace(telegramQuotedContent(reply))
+	if quoted == "" {
+		return content
+	}
+
+	author := telegramQuotedAuthor(reply)
+	role := c.telegramQuotedRole(reply)
+	if strings.TrimSpace(content) == "" {
+		return fmt.Sprintf("[quoted %s message from %s]: %s", role, author, quoted)
+	}
+	return fmt.Sprintf("[quoted %s message from %s]: %s\n\n%s", role, author, quoted, content)
+}
+
+func (c *TelegramChannel) telegramQuotedRole(message *telego.Message) string {
+	if message == nil {
+		return "unknown"
+	}
+
+	if message.From != nil {
+		if !message.From.IsBot {
+			return "user"
+		}
+		if c.isOwnBotUser(message.From) {
+			return "assistant"
+		}
+		return "bot"
+	}
+
+	if message.SenderChat != nil {
+		return "chat"
+	}
+
+	return "unknown"
+}
+
+func (c *TelegramChannel) isOwnBotUser(user *telego.User) bool {
+	if c == nil || c.bot == nil || user == nil || !user.IsBot {
+		return false
+	}
+
+	if botID := c.bot.ID(); botID != 0 && user.ID == botID {
+		return true
+	}
+
+	botUsername := strings.TrimPrefix(strings.TrimSpace(c.bot.Username()), "@")
+	if botUsername == "" {
+		return false
+	}
+	return strings.EqualFold(strings.TrimPrefix(strings.TrimSpace(user.Username), "@"), botUsername)
+}
+
+func telegramQuotedAuthor(message *telego.Message) string {
+	if message == nil || message.From == nil {
+		return "unknown"
+	}
+	if username := strings.TrimSpace(message.From.Username); username != "" {
+		return username
+	}
+	if firstName := strings.TrimSpace(message.From.FirstName); firstName != "" {
+		return firstName
+	}
+	return "unknown"
+}
+
+func telegramQuotedContent(message *telego.Message) string {
+	if message == nil {
+		return ""
+	}
+
+	var parts []string
+	if text := strings.TrimSpace(message.Text); text != "" {
+		parts = append(parts, text)
+	}
+	if caption := strings.TrimSpace(message.Caption); caption != "" {
+		parts = append(parts, caption)
+	}
+	switch {
+	case len(message.Photo) > 0:
+		parts = append(parts, "[image: photo]")
+	}
+	switch {
+	case message.Voice != nil:
+		parts = append(parts, "[voice]")
+	case message.Audio != nil:
+		parts = append(parts, "[audio]")
+	}
+	if message.Document != nil {
+		parts = append(parts, "[file]")
+	}
+
+	return strings.Join(parts, "\n")
+}
+
+func quotedTelegramMediaRefs(
+	message *telego.Message,
+	resolve func(fileID, ext, filename string) string,
+) []string {
+	if message == nil || resolve == nil {
+		return nil
+	}
+
+	var refs []string
+	if message.Voice != nil {
+		if ref := resolve(message.Voice.FileID, ".ogg", "voice.ogg"); ref != "" {
+			refs = append(refs, ref)
+		}
+	}
+	if message.Audio != nil {
+		if ref := resolve(message.Audio.FileID, ".mp3", "audio.mp3"); ref != "" {
+			refs = append(refs, ref)
+		}
+	}
+	return refs
+}

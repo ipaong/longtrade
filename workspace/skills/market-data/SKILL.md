@@ -1,0 +1,60 @@
+---
+name: market-data
+description: Fetch real-time and historical market data from configured exchanges — tickers, OHLCV candles, order books, and market catalogues.
+---
+
+# Market Data
+
+Use these tools to retrieve live and historical market information from any configured exchange.
+
+## Workflow
+
+1. Call `list_portfolios` first to discover available providers.
+2. Use `get_ticker` for a single symbol or `get_tickers` for multiple symbols.
+3. Use `get_ohlcv` to fetch candle data for chart analysis.
+4. Use `get_orderbook` to inspect bid/ask depth.
+5. Use `get_markets` to browse all tradeable symbols on a provider.
+
+## Tools
+
+### get_ticker
+Fetch the latest ticker for a single trading pair on specified exchange format.
+- `provider`: exchange name (e.g. "binance", "bitkub", "binanceusdm")
+- `account`: account name (leave empty for default)
+- `symbol`: unified symbol (e.g. "BTC/USDT", "BTC_THB", "BTC/USDT:USDT")
+
+### get_tickers
+Fetch tickers for multiple symbols at once (max 20).
+- `provider`: exchange name
+- `account`: account name (optional)
+- `symbols`: array of symbols. Pass empty array to fetch all.
+
+### get_ohlcv
+Fetch OHLCV candlestick data.
+- `provider`, `account`, `symbol`: as above
+- `timeframe`: one of 1m, 5m, 15m, 1h, 4h, 1d, 1w
+- `limit`: number of candles (max 500, default 100)
+- `since`: start time in Unix milliseconds (optional)
+
+**Settrade timeframe mapping**: 1m→1m, 5m→5m, 15m→15m, 1h→60m, 4h→240m, 1d→1d, 1w→1w
+
+### get_orderbook
+Fetch the current order book.
+- `provider`, `account`, `symbol`: as above
+- `depth`: number of price levels per side (default 10, max 50)
+
+### get_markets
+List all tradeable markets on a provider.
+- `provider`, `account`: as above
+- `base`: filter by base currency (e.g. "BTC")
+- `quote`: filter by quote currency (e.g. "USDT")
+- `type`: filter by market type ("spot", "swap", "future")
+
+## Notes
+- All symbols use CCXT unified format with "/" separator (e.g. "BTC/USDT").
+- Perpetual futures/swaps use CCXT contract symbols with a settlement suffix,
+  e.g. Binance and OKX USDT perps are `BTC/USDT:USDT`.
+- BinanceTH and Bitkub have limited market data capabilities (price feed only).
+- **Settrade (SET equity)**: use "PTT/THB" or just "PTT" for symbol. Supports `get_ticker`, `get_tickers`, and `get_ohlcv`. Order book (`get_orderbook`) and `get_markets` are not supported.
+- **Webull (US equity)**: use "AAPL/USD" or just "AAPL" for symbol. Supports `get_ticker`, `get_tickers`, and `get_ohlcv`. Order book (`get_orderbook`) and `get_markets` are not supported. ETFs (SPY, VOO, …) work with the same tools (the provider resolves the US_STOCK/US_ETF category automatically).
+- **Webull options**: use the `option_quote` tool (not `get_ticker`) — params `underlying`, `expiry` (yyyy-MM-dd), `strike`, `option_type` (`CALL`|`PUT`). Returns price, bid/ask, and greeks (delta, gamma, theta, vega, rho), implied volatility, and open interest. **Requires a US_OPTION market-data subscription** on the Webull account — without it the call returns a clear "subscribe to US_OPTION quotes" error.

@@ -1,0 +1,55 @@
+services:
+  # ─────────────────────────────────────────────
+  # KhunQuant Agent (one-shot query)
+  #   docker compose -f docker/docker-compose.yml run --rm khunquant-agent -m "Hello"
+  # ─────────────────────────────────────────────
+  khunquant-agent:
+    image: docker.io/cryptoquantumwave/khunquant:latest
+    container_name: khunquant-agent
+    profiles:
+      - agent
+    # Uncomment to access host network; leave commented unless needed.
+    #extra_hosts:
+    #  - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data:/root/.khunquant
+    entrypoint: ["khunquant", "agent"]
+    stdin_open: true
+    tty: true
+
+  # ─────────────────────────────────────────────
+  # KhunQuant Gateway (Long-running Bot)
+  #   docker compose -f docker/docker-compose.yml --profile gateway up
+  # ─────────────────────────────────────────────
+  khunquant-gateway:
+    image: docker.io/cryptoquantumwave/khunquant:latest
+    container_name: khunquant-gateway
+    restart: on-failure
+    profiles:
+      - gateway
+    # Uncomment to access host network; leave commented unless needed.
+    #extra_hosts:
+    #  - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data:/root/.khunquant
+
+  # ─────────────────────────────────────────────
+  # KhunQuant Launcher (Web Console + Gateway)
+  #   docker compose -f docker/docker-compose.yml --profile launcher up
+  # ─────────────────────────────────────────────
+  khunquant-launcher:
+    image: docker.io/cryptoquantumwave/khunquant:launcher
+    container_name: khunquant-launcher
+    restart: on-failure
+    profiles:
+      - launcher
+    environment:
+      - PICOCLAW_GATEWAY_HOST=0.0.0.0
+      # Set a fixed dashboard token instead of a random one each restart.
+      # If not set, a random token is generated and printed to the console on startup.
+      #- PICOCLAW_LAUNCHER_TOKEN=your-secret-token-here
+    ports:
+      - "18800:18800"
+      - "18790:18790"
+    volumes:
+      - ./data:/root/.khunquant

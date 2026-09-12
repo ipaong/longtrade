@@ -1,0 +1,696 @@
+// KhunQuant - Ultra-lightweight personal AI agent
+// License: MIT
+//
+// Copyright (c) 2026 KhunQuant contributors
+
+package config
+
+import (
+	"os"
+	"path/filepath"
+)
+
+// HomeDir returns the KhunQuant home directory: $KHUNQUANT_HOME if set,
+// otherwise ~/.khunquant. This is the same resolution DefaultConfig uses for
+// the default config/workspace location, exported so other packages that
+// need a process-wide, config-path-independent storage location (e.g. a
+// cross-process session cache) don't duplicate the env var lookup.
+func HomeDir() string {
+	if khunquantHome := os.Getenv("KHUNQUANT_HOME"); khunquantHome != "" {
+		return khunquantHome
+	}
+	userHome, _ := os.UserHomeDir()
+	return filepath.Join(userHome, ".khunquant")
+}
+
+// DefaultConfig returns the default configuration for KhunQuant.
+func DefaultConfig() *Config {
+	homePath := HomeDir()
+	workspacePath := filepath.Join(homePath, "workspace")
+
+	return &Config{
+		// A fresh install is current, so it never looks like a legacy config.
+		Version: CurrentConfigVersion,
+		Agents: AgentsConfig{
+			Defaults: AgentDefaults{
+				Workspace:                  workspacePath,
+				RestrictToWorkspace:        true,
+				Provider:                   "",
+				Model:                      "",
+				MaxTokens:                  32768,
+				Temperature:                nil, // nil means use provider default
+				MaxToolIterations:          30,
+				SummarizeMessageThreshold:  20,
+				SummarizeTokenPercent:      75,
+				ContextManager:             "seahorse",
+				FollowUpNudge:              true,
+				InjectFinancialContext:     true,
+				FinancialContextTTLMinutes: 30,
+				MaxContextAssets:           5,
+				MaxContextDCAPlans:         3,
+				MaxContextDNPlans:          3,
+			},
+		},
+		Bindings: []AgentBinding{},
+		Session: SessionConfig{
+			DMScope: "per-channel-peer",
+		},
+		Channels: ChannelsConfig{
+			WhatsApp: WhatsAppConfig{
+				Enabled:          false,
+				BridgeURL:        "ws://localhost:3001",
+				UseNative:        false,
+				SessionStorePath: "",
+				AllowFrom:        FlexibleStringSlice{},
+			},
+			Telegram: TelegramConfig{
+				Enabled:        false,
+				AllowFrom:      FlexibleStringSlice{},
+				PairingEnabled: true,
+				Typing:         TypingConfig{Enabled: true},
+				Placeholder: PlaceholderConfig{
+					Enabled: true,
+					Text:    "Thinking... 💭",
+				},
+			},
+			Feishu: FeishuConfig{
+				Enabled:   false,
+				AppID:     "",
+				AllowFrom: FlexibleStringSlice{},
+			},
+			Discord: DiscordConfig{
+				Enabled:     false,
+				AllowFrom:   FlexibleStringSlice{},
+				MentionOnly: false,
+			},
+			MaixCam: MaixCamConfig{
+				Enabled:   false,
+				Host:      "0.0.0.0",
+				Port:      18790,
+				AllowFrom: FlexibleStringSlice{},
+			},
+			QQ: QQConfig{
+				Enabled:          false,
+				AppID:            "",
+				AllowFrom:        FlexibleStringSlice{},
+				MaxMessageLength: 2000,
+			},
+			DingTalk: DingTalkConfig{
+				Enabled:   false,
+				ClientID:  "",
+				AllowFrom: FlexibleStringSlice{},
+			},
+			Slack: SlackConfig{
+				Enabled:   false,
+				AllowFrom: FlexibleStringSlice{},
+			},
+			Matrix: MatrixConfig{
+				Enabled:      false,
+				Homeserver:   "https://matrix.org",
+				UserID:       "",
+				DeviceID:     "",
+				JoinOnInvite: true,
+				AllowFrom:    FlexibleStringSlice{},
+				GroupTrigger: GroupTriggerConfig{
+					MentionOnly: true,
+				},
+				Placeholder: PlaceholderConfig{
+					Enabled: true,
+					Text:    "Thinking... 💭",
+				},
+			},
+			LINE: LINEConfig{
+				Enabled:      false,
+				WebhookHost:  "0.0.0.0",
+				WebhookPort:  18791,
+				WebhookPath:  "/webhook/line",
+				AllowFrom:    FlexibleStringSlice{},
+				GroupTrigger: GroupTriggerConfig{MentionOnly: true},
+			},
+			OneBot: OneBotConfig{
+				Enabled:            false,
+				WSUrl:              "ws://127.0.0.1:3001",
+				ReconnectInterval:  5,
+				GroupTriggerPrefix: []string{},
+				AllowFrom:          FlexibleStringSlice{},
+			},
+			WeCom: WeComConfig{
+				Enabled:      false,
+				WebhookURL:   "",
+				WebhookHost:  "0.0.0.0",
+				WebhookPort:  18793,
+				WebhookPath:  "/webhook/wecom",
+				AllowFrom:    FlexibleStringSlice{},
+				ReplyTimeout: 5,
+			},
+			WeComApp: WeComAppConfig{
+				Enabled:      false,
+				CorpID:       "",
+				AgentID:      0,
+				WebhookHost:  "0.0.0.0",
+				WebhookPort:  18792,
+				WebhookPath:  "/webhook/wecom-app",
+				AllowFrom:    FlexibleStringSlice{},
+				ReplyTimeout: 5,
+			},
+			WeComAIBot: WeComAIBotConfig{
+				Enabled:        false,
+				WebhookPath:    "/webhook/wecom-aibot",
+				AllowFrom:      FlexibleStringSlice{},
+				ReplyTimeout:   5,
+				MaxSteps:       10,
+				WelcomeMessage: "Hello! I'm your AI assistant. How can I help you today?",
+			},
+			Pico: PicoConfig{
+				Enabled:        false,
+				PingInterval:   30,
+				ReadTimeout:    60,
+				WriteTimeout:   10,
+				MaxConnections: 100,
+				AllowFrom:      FlexibleStringSlice{},
+			},
+		},
+		Providers: ProvidersConfig{
+			OpenAI: OpenAIProviderConfig{WebSearch: true},
+		},
+		ModelList: []ModelConfig{
+			// ============================================
+			// Add your API key to the model you want to use
+			// ============================================
+
+			// Zhipu AI (智谱) - https://open.bigmodel.cn/usercenter/apikeys
+			{
+				ModelName: "glm-4.7",
+				Model:     "zhipu/glm-4.7",
+				APIBase:   "https://open.bigmodel.cn/api/paas/v4",
+			},
+
+			// OpenAI - https://platform.openai.com/api-keys
+			{
+				ModelName: "gpt-5.4",
+				Model:     "openai/gpt-5.4",
+				APIBase:   "https://api.openai.com/v1",
+			},
+
+			// Anthropic Claude - https://console.anthropic.com/settings/keys
+			{
+				ModelName: DefaultAnthropicModelName,
+				Model:     DefaultAnthropicModel,
+				APIBase:   "https://api.anthropic.com/v1",
+			},
+
+			// DeepSeek - https://platform.deepseek.com/
+			{
+				ModelName: "deepseek-chat",
+				Model:     "deepseek/deepseek-chat",
+				APIBase:   "https://api.deepseek.com/v1",
+			},
+
+			// Google Gemini - https://ai.google.dev/
+			{
+				ModelName: "gemini-2.0-flash",
+				Model:     "gemini/gemini-2.0-flash-exp",
+				APIBase:   "https://generativelanguage.googleapis.com/v1beta",
+			},
+
+			// Qwen (通义千问) - https://dashscope.console.aliyun.com/apiKey
+			{
+				ModelName: "qwen-plus",
+				Model:     "qwen/qwen-plus",
+				APIBase:   "https://dashscope.aliyuncs.com/compatible-mode/v1",
+			},
+
+			// Moonshot (月之暗面) - https://platform.moonshot.cn/console/api-keys
+			{
+				ModelName: "moonshot-v1-8k",
+				Model:     "moonshot/moonshot-v1-8k",
+				APIBase:   "https://api.moonshot.cn/v1",
+			},
+
+			// Groq - https://console.groq.com/keys
+			{
+				ModelName: "llama-3.3-70b",
+				Model:     "groq/llama-3.3-70b-versatile",
+				APIBase:   "https://api.groq.com/openai/v1",
+			},
+
+			// OpenRouter (100+ models) - https://openrouter.ai/keys
+			{
+				ModelName: "openrouter-auto",
+				Model:     "openrouter/auto",
+				APIBase:   "https://openrouter.ai/api/v1",
+			},
+			{
+				ModelName: "openrouter-gpt-5.4",
+				Model:     "openrouter/openai/gpt-5.4",
+				APIBase:   "https://openrouter.ai/api/v1",
+			},
+
+			// NVIDIA - https://build.nvidia.com/
+			{
+				ModelName: "nemotron-4-340b",
+				Model:     "nvidia/nemotron-4-340b-instruct",
+				APIBase:   "https://integrate.api.nvidia.com/v1",
+			},
+
+			// Cerebras - https://inference.cerebras.ai/
+			{
+				ModelName: "cerebras-llama-3.3-70b",
+				Model:     "cerebras/llama-3.3-70b",
+				APIBase:   "https://api.cerebras.ai/v1",
+			},
+
+			// Vivgrid - https://vivgrid.com
+			{
+				ModelName: "vivgrid-auto",
+				Model:     "vivgrid/auto",
+				APIBase:   "https://api.vivgrid.com/v1",
+			},
+
+			// Volcengine (火山引擎) - https://console.volcengine.com/ark
+			{
+				ModelName: "ark-code-latest",
+				Model:     "volcengine/ark-code-latest",
+				APIBase:   "https://ark.cn-beijing.volces.com/api/v3",
+			},
+			{
+				ModelName: "doubao-pro",
+				Model:     "volcengine/doubao-pro-32k",
+				APIBase:   "https://ark.cn-beijing.volces.com/api/v3",
+			},
+
+			// ShengsuanYun (神算云)
+			{
+				ModelName: "deepseek-v3",
+				Model:     "shengsuanyun/deepseek-v3",
+				APIBase:   "https://api.shengsuanyun.com/v1",
+			},
+
+			// Antigravity (Google Cloud Code Assist) - OAuth only
+			{
+				ModelName:  "gemini-flash",
+				Model:      "antigravity/gemini-3-flash",
+				AuthMethod: "oauth",
+			},
+
+			// GitHub Copilot - https://github.com/settings/tokens
+			{
+				ModelName:  "copilot-gpt-5.4",
+				Model:      "github-copilot/gpt-5.4",
+				APIBase:    "http://localhost:4321",
+				AuthMethod: "oauth",
+			},
+
+			// Ollama (local) - https://ollama.com
+			{
+				ModelName: "llama3",
+				Model:     "ollama/llama3",
+				APIBase:   "http://localhost:11434/v1",
+				APIKey:    *NewSecureString("ollama"),
+			},
+
+			// Mistral AI - https://console.mistral.ai/api-keys
+			{
+				ModelName: "mistral-small",
+				Model:     "mistral/mistral-small-latest",
+				APIBase:   "https://api.mistral.ai/v1",
+			},
+
+			// Avian - https://avian.io
+			{
+				ModelName: "deepseek-v3.2",
+				Model:     "avian/deepseek/deepseek-v3.2",
+				APIBase:   "https://api.avian.io/v1",
+			},
+			{
+				ModelName: "kimi-k2.5",
+				Model:     "avian/moonshotai/kimi-k2.5",
+				APIBase:   "https://api.avian.io/v1",
+			},
+
+			// Minimax - https://api.minimaxi.com/
+			{
+				ModelName: "MiniMax-M2.5",
+				Model:     "minimax/MiniMax-M2.5",
+				APIBase:   "https://api.minimaxi.com/v1",
+			},
+
+			// LongCat - https://longcat.chat/platform
+			{
+				ModelName: "LongCat-Flash-Thinking",
+				Model:     "longcat/LongCat-Flash-Thinking",
+				APIBase:   "https://api.longcat.chat/openai",
+			},
+
+			// ModelScope (魔搭社区) - https://modelscope.cn/my/tokens
+			{
+				ModelName: "modelscope-qwen",
+				Model:     "modelscope/Qwen/Qwen3-235B-A22B-Instruct-2507",
+				APIBase:   "https://api-inference.modelscope.cn/v1",
+			},
+
+			// VLLM (local) - http://localhost:8000
+			{
+				ModelName: "local-model",
+				Model:     "vllm/custom-model",
+				APIBase:   "http://localhost:8000/v1",
+			},
+
+			// llama.cpp (local) - http://localhost:8080
+			{
+				ModelName: "llamacpp-model",
+				Model:     "llamacpp/custom-model",
+				APIBase:   "http://localhost:8080/v1",
+			},
+
+			// Azure OpenAI - https://portal.azure.com
+			// model_name is a user-friendly alias; the model field's path after "azure/" is your deployment name
+			{
+				ModelName: "azure-gpt5",
+				Model:     "azure/my-gpt5-deployment",
+				APIBase:   "https://your-resource.openai.azure.com",
+			},
+		},
+		Gateway: GatewayConfig{
+			Host: "127.0.0.1",
+			Port: 18790,
+		},
+		Tools: ToolsConfig{
+			FilterSensitiveData: true,
+			MediaCleanup: MediaCleanupConfig{
+				ToolConfig: ToolConfig{
+					Enabled: true,
+				},
+				MaxAge:   30,
+				Interval: 5,
+			},
+			Web: WebToolsConfig{
+				ToolConfig: ToolConfig{
+					Enabled: true,
+				},
+				Proxy:           "",
+				FetchLimitBytes: 10 * 1024 * 1024, // 10MB by default
+				Brave: BraveConfig{
+					Enabled:    false,
+					APIKeys:    nil,
+					MaxResults: 5,
+				},
+				Tavily: TavilyConfig{
+					Enabled:    false,
+					APIKeys:    nil,
+					MaxResults: 5,
+				},
+				DuckDuckGo: DuckDuckGoConfig{
+					Enabled:    true,
+					MaxResults: 5,
+				},
+				Perplexity: PerplexityConfig{
+					Enabled:    false,
+					APIKeys:    nil,
+					MaxResults: 5,
+				},
+				SearXNG: SearXNGConfig{
+					Enabled:    false,
+					BaseURL:    "",
+					MaxResults: 5,
+				},
+				GLMSearch: GLMSearchConfig{
+					Enabled:      false,
+					BaseURL:      "https://open.bigmodel.cn/api/paas/v4/web_search",
+					SearchEngine: "search_std",
+					MaxResults:   5,
+				},
+			},
+			Cron: CronToolsConfig{
+				ToolConfig: ToolConfig{
+					Enabled: true,
+				},
+				ExecTimeoutMinutes: 5,
+			},
+			Exec: ExecConfig{
+				ToolConfig: ToolConfig{
+					Enabled: true,
+				},
+				EnableDenyPatterns: true,
+				AllowRemote:        false,
+				TimeoutSeconds:     60,
+			},
+			Skills: SkillsToolsConfig{
+				ToolConfig: ToolConfig{
+					Enabled: true,
+				},
+				Registries: SkillsRegistriesConfig{
+					ClawHub: ClawHubRegistryConfig{
+						Enabled: true,
+						BaseURL: "https://clawhub.ai",
+					},
+				},
+				MaxConcurrentSearches: 2,
+				SearchCache: SearchCacheConfig{
+					MaxSize:    50,
+					TTLSeconds: 300,
+				},
+			},
+			SendFile: ToolConfig{
+				Enabled: true,
+			},
+			MCP: MCPConfig{
+				ToolConfig: ToolConfig{
+					Enabled: false,
+				},
+				Discovery: ToolDiscoveryConfig{
+					Enabled:          false,
+					TTL:              5,
+					MaxSearchResults: 5,
+					UseBM25:          true,
+					UseRegex:         false,
+				},
+				Servers: map[string]MCPServerConfig{},
+			},
+			AppendFile: ToolConfig{
+				Enabled: true,
+			},
+			EditFile: ToolConfig{
+				Enabled: true,
+			},
+			FindSkills: ToolConfig{
+				Enabled: true,
+			},
+			I2C: ToolConfig{
+				Enabled: false, // Hardware tool - Linux only
+			},
+			InstallSkill: ToolConfig{
+				Enabled: true,
+			},
+			ListDir: ToolConfig{
+				Enabled: true,
+			},
+			Message: ToolConfig{
+				Enabled: true,
+			},
+			ReadFile: ReadFileToolConfig{
+				Enabled:         true,
+				MaxReadFileSize: 64 * 1024, // 64KB
+			},
+			Spawn: ToolConfig{
+				Enabled: true,
+			},
+			SPI: ToolConfig{
+				Enabled: false, // Hardware tool - Linux only
+			},
+			Serial: ToolConfig{
+				Enabled: false, // Hardware tool - opt-in (Linux/macOS/Windows)
+			},
+			Subagent: ToolConfig{
+				Enabled: true,
+			},
+			WebFetch: ToolConfig{
+				Enabled: true,
+			},
+			WriteFile: ToolConfig{
+				Enabled: true,
+			},
+			GetAssetsList: ToolConfig{
+				Enabled: true,
+			},
+			GetTotalValue: ToolConfig{
+				Enabled: true,
+			},
+			ListPortfolios: ToolConfig{
+				Enabled: true,
+			},
+			TakeSnapshot: ToolConfig{
+				Enabled: true,
+			},
+			QuerySnapshots: ToolConfig{
+				Enabled: true,
+			},
+			SnapshotSummary: ToolConfig{
+				Enabled: true,
+			},
+			DeleteSnapshots: ToolConfig{
+				Enabled: true,
+			},
+
+			// Market intelligence tools (Track A)
+			GetTicker: ToolConfig{
+				Enabled: true,
+			},
+			GetTickers: ToolConfig{
+				Enabled: true,
+			},
+			GetOHLCV: ToolConfig{
+				Enabled: true,
+			},
+			GetOrderBook: ToolConfig{
+				Enabled: true,
+			},
+			GetMarkets: ToolConfig{
+				Enabled: true,
+			},
+
+			// Order execution tools (Track B) — disabled by default; opt-in for live trading
+			CreateOrder: ToolConfig{
+				Enabled: false,
+			},
+			CancelOrder: ToolConfig{
+				Enabled: false,
+			},
+			GetOrder: ToolConfig{
+				Enabled: true,
+			},
+			GetOpenOrders: ToolConfig{
+				Enabled: true,
+			},
+			GetOrderHistory: ToolConfig{
+				Enabled: true,
+			},
+			GetTradeHistory: ToolConfig{
+				Enabled: true,
+			},
+			EmergencyStop: ToolConfig{
+				Enabled: false,
+			},
+			PaperTrade: ToolConfig{
+				Enabled: true,
+			},
+			GetOrderRateStatus: ToolConfig{
+				Enabled: true,
+			},
+			FuturesSetLeverage: ToolConfig{
+				Enabled: false,
+			},
+			FuturesOpenPosition: ToolConfig{
+				Enabled: false,
+			},
+			FuturesGetOrder: ToolConfig{
+				Enabled: true,
+			},
+			FuturesGetPositions: ToolConfig{
+				Enabled: true,
+			},
+			FuturesGetFunding: ToolConfig{
+				Enabled: true,
+			},
+
+			// Technical analysis tools (Track C)
+			CalculateIndicators: ToolConfig{
+				Enabled: true,
+			},
+			MarketAnalysis: ToolConfig{
+				Enabled: true,
+			},
+			PortfolioAllocation: ToolConfig{
+				Enabled: true,
+			},
+
+			// Alert and transfer tools (Track D)
+			SetPriceAlert: ToolConfig{
+				Enabled: true,
+			},
+			SetIndicatorAlert: ToolConfig{
+				Enabled: true,
+			},
+			TransferFunds: ToolConfig{
+				Enabled: false,
+			},
+
+			// DCA — Dollar Cost Averaging (Track E)
+			CreateDCAPlan: ToolConfig{
+				Enabled: true,
+			},
+			ListDCAPlans: ToolConfig{
+				Enabled: true,
+			},
+			UpdateDCAPlan: ToolConfig{
+				Enabled: true,
+			},
+			DeleteDCAPlan: ToolConfig{
+				Enabled: true,
+			},
+			ExecuteDCAOrder: ToolConfig{
+				Enabled: true,
+			},
+			GetDCAHistory: ToolConfig{
+				Enabled: true,
+			},
+			GetDCASummary: ToolConfig{
+				Enabled: true,
+			},
+
+			// PnL — Profit and Loss (Track F)
+			GetPnLSummary: ToolConfig{
+				Enabled: true,
+			},
+			GetPnLDetail: ToolConfig{
+				Enabled: true,
+			},
+
+			// Security tools — disabled by default; opt-in for agent access to secrets
+			ConfigEncryptKeys: ToolConfig{
+				Enabled: false,
+			},
+		},
+		Exchanges: ExchangesConfig{
+			Binance: BinanceExchangeConfig{
+				Enabled: false,
+			},
+		},
+		TradingRisk: TradingRiskConfig{
+			PaperTradingMode: true,
+			AllowLeverage:    false,
+		},
+		Heartbeat: HeartbeatConfig{
+			Enabled:  true,
+			Interval: 30,
+		},
+		Devices: DevicesConfig{
+			Enabled:    false,
+			MonitorUSB: true,
+		},
+		Debug: DebugConfig{
+			DevMCP: DevMCPConfig{
+				Enabled:       false,
+				Token:         "",
+				MaxLogEntries: 50,
+				PathPrefix:    "/dev-mcp",
+			},
+			Sandbox: SandboxConfig{
+				Enabled:     false,
+				FixturesDir: "",
+			},
+		},
+		Voice: VoiceConfig{
+			EchoTranscription: false,
+		},
+		BuildInfo: BuildInfo{
+			Version:   Version,
+			GitCommit: GitCommit,
+			BuildTime: BuildTime,
+			GoVersion: GoVersion,
+		},
+		Update: UpdateConfig{
+			CheckOnStart: true,
+		},
+	}
+}

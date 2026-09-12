@@ -1,0 +1,10 @@
+.git
+.gitignore
+build/
+.khunquant/
+config/
+.env
+.env.example
+*.md
+LICENSE
+assets/

@@ -1,0 +1,227 @@
+package tools
+
+// Tool name constants — single source of truth for all static tool names.
+const (
+	NameReadFile        = "read_file"
+	NameWriteFile       = "write_file"
+	NameListDir         = "list_dir"
+	NameEditFile        = "edit_file"
+	NameAppendFile      = "append_file"
+	NameExec            = "exec"
+	NameCron            = "cron"
+	NameWebSearch       = "web_search"
+	NameWebFetch        = "web_fetch"
+	NameMessage         = "message"
+	NameSendFile        = "send_file"
+	NameFindSkills      = "find_skills"
+	NameInstallSkill    = "install_skill"
+	NameSpawn           = "spawn"
+	NameDelegate        = "delegate"
+	NameGetAssetsList   = "get_assets_list"
+	NameGetTotalValue   = "get_total_value"
+	NameListPortfolios  = "list_portfolios"
+	NameWebullReconnect = "webull_reconnect"
+	NameTakeSnapshot    = "take_snapshot"
+	NameQuerySnapshots  = "query_snapshots"
+	NameSnapshotSummary = "snapshot_summary"
+	NameDeleteSnapshots = "delete_snapshots"
+	NameI2C             = "i2c"
+	NameSPI             = "spi"
+	NameSerial          = "serial"
+	NameToolSearchRegex = "tool_search_tool_regex"
+	NameToolSearchBM25  = "tool_search_tool_bm25"
+
+	// Market intelligence (Track A)
+	NameGetTicker    = "get_ticker"
+	NameGetTickers   = "get_tickers"
+	NameGetOHLCV     = "get_ohlcv"
+	NameGetOrderBook = "get_orderbook"
+	NameGetMarkets   = "get_markets"
+
+	// Order execution (Track B)
+	NameCreateOrder        = "create_order"
+	NameCancelOrder        = "cancel_order"
+	NameGetOrder           = "get_order"
+	NameGetOpenOrders      = "get_open_orders"
+	NameGetOrderHistory    = "get_order_history"
+	NameGetTradeHistory    = "get_trade_history"
+	NameEmergencyStop      = "emergency_stop"
+	NamePaperTrade         = "paper_trade"
+	NameGetOrderRateStatus = "get_order_rate_status"
+
+	// Options (Track B3)
+	NameOptionQuote       = "option_quote"
+	NameOptionCreateOrder = "option_create_order"
+	NameOptionCancelOrder = "option_cancel_order"
+	NameOptionGetOrder    = "option_get_order"
+	NameOptionOpenOrders  = "option_open_orders"
+
+	// Futures / perpetual swaps (Track B2)
+	NameFuturesSetLeverage        = "futures_set_leverage"
+	NameFuturesOpenPosition       = "futures_open_position"
+	NameFuturesGetOrder           = "futures_get_order"
+	NameFuturesGetPositions       = "futures_get_positions"
+	NameFuturesGetFunding         = "futures_get_funding"
+	NameFuturesValidateMarket     = "futures_validate_market"
+	NameFuturesRiskSummary        = "futures_risk_summary"
+	NameFuturesEstimateFundingFee = "futures_estimate_funding_fee"
+	NameFuturesClosePosition      = "futures_close_position"
+	NameFuturesReducePosition     = "futures_reduce_position"
+	NameFuturesModifyProtection   = "futures_modify_protection"
+	NameFuturesCancelOrders       = "futures_cancel_orders"
+	NameFuturesEmergencyFlatten   = "futures_emergency_flatten"
+	NameFundingRateHistory        = "funding_rate_history"
+
+	// Technical analysis (Track C)
+	NameCalculateIndicators = "calculate_indicators"
+	NameMarketAnalysis      = "market_analysis"
+	NamePortfolioAllocation = "portfolio_allocation"
+
+	// Alerts and transfers (Track D)
+	NameSetPriceAlert     = "set_price_alert"
+	NameSetIndicatorAlert = "set_indicator_alert"
+	NameTransferFunds     = "transfer_funds"
+
+	// Security
+	NameConfigEncryptKeys = "config_encrypt_keys"
+
+	// PnL — Profit and Loss (Track F)
+	NameGetPnLSummary = "get_pnl_summary"
+	NameGetPnLDetail  = "get_pnl_detail"
+
+	// DCA — Dollar Cost Averaging (Track E)
+	NameCreateDCAPlan   = "create_dca_plan"
+	NameListDCAPlans    = "list_dca_plans"
+	NameUpdateDCAPlan   = "update_dca_plan"
+	NameDeleteDCAPlan   = "delete_dca_plan"
+	NameExecuteDCAOrder = "execute_dca_order"
+	NameGetDCAHistory   = "get_dca_history"
+	NameGetDCASummary   = "get_dca_summary"
+
+	// Delta-Neutral (Track G)
+	NameCreateDeltaNeutralPlan        = "create_delta_neutral_plan"
+	NameListDeltaNeutralPlans         = "list_delta_neutral_plans"
+	NameGetDeltaNeutralPlan           = "get_delta_neutral_plan"
+	NameUpdateDeltaNeutralPlan        = "update_delta_neutral_plan"
+	NameDeleteDeltaNeutralPlan        = "delete_delta_neutral_plan"
+	NameGetDeltaNeutralSummary        = "get_delta_neutral_summary"
+	NameGetDeltaNeutralHistory        = "get_delta_neutral_history"
+	NameGetDeltaNeutralSpread         = "get_delta_neutral_spread"
+	NameGetDeltaNeutralEarn           = "get_delta_neutral_earn"
+	NamePrepareDeltaNeutralPlan       = "prepare_delta_neutral_plan"
+	NameOpenDeltaNeutralPosition      = "open_delta_neutral_position"
+	NameUnwindDeltaNeutralPosition    = "unwind_delta_neutral_position"
+	NameResizeDeltaNeutralPosition    = "resize_delta_neutral_position"
+	NameScanDeltaNeutralOpportunities = "scan_delta_neutral_opportunities"
+	NameRenderDeltaNeutralYieldChart  = "render_delta_neutral_yield_chart"
+
+	// Earn (Track G — Savings/Staking)
+	NameEarnOverview       = "earn_overview"
+	NameManageEarnPosition = "manage_earn_position"
+)
+
+// Category constants for the web UI tool catalog.
+const (
+	CatFilesystem    = "filesystem"
+	CatAutomation    = "automation"
+	CatWeb           = "web"
+	CatCommunication = "communication"
+	CatSkills        = "skills"
+	CatAgents        = "agents"
+	CatPortfolios    = "portfolios"
+	CatHardware      = "hardware"
+	CatDiscovery     = "discovery"
+	CatMarkets       = "markets"
+	CatOrders        = "orders"
+	CatFutures       = "futures"
+	CatAnalysis      = "analysis"
+	CatAlerts        = "alerts"
+	CatDCA           = "dca"
+	CatPnL           = "pnl"
+	CatDeltaNeutral  = "delta_neutral"
+	CatOptions       = "options"
+)
+
+// Catalog description constants — short, UI-facing summaries for the web tool catalog.
+// These are distinct from each tool's Description() method which is the detailed LLM-facing prompt.
+const (
+	DescReadFile                  = "Read file content from the workspace or explicitly allowed paths."
+	DescWriteFile                 = "Create or overwrite files within the writable workspace scope."
+	DescListDir                   = "Inspect directories and enumerate files available to the agent."
+	DescEditFile                  = "Apply targeted edits to existing files without rewriting everything."
+	DescAppendFile                = "Append content to the end of an existing file."
+	DescExec                      = "Run shell commands inside the configured workspace sandbox."
+	DescCron                      = "Schedule one-time or recurring reminders, jobs, and shell commands."
+	DescWebSearch                 = "Search the web using the configured providers."
+	DescWebFetch                  = "Fetch and summarize the contents of a webpage."
+	DescMessage                   = "Send a follow-up message back to the active user or chat."
+	DescSendFile                  = "Send an outbound file or media attachment to the active chat."
+	DescFindSkills                = "Search external skill registries for installable skills."
+	DescInstallSkill              = "Install a skill into the current workspace from a registry."
+	DescSpawn                     = "Launch a background subagent for long-running or delegated work."
+	DescGetAssetsList             = "Retrieve asset balances from a configured cryptocurrency exchange."
+	DescGetTotalValue             = "Estimate the total portfolio value in a quote currency by fetching all wallet balances and looking up live prices."
+	DescListPortfolios            = "List all available portfolio accounts (exchange + account name pairs) that are enabled and have credentials configured."
+	DescWebullReconnect           = "Re-establish an approved Webull session when a call reports it needs re-authentication; asks the user to approve in the Webull app and waits in the background."
+	DescTakeSnapshot              = "Capture a snapshot of all portfolio balances and store it for historical tracking."
+	DescQuerySnapshots            = "Query historical portfolio snapshots filtered by time range, label, source, or asset."
+	DescSnapshotSummary           = "Summarize portfolio performance across snapshots, showing gains and losses over time."
+	DescDeleteSnapshots           = "Delete historical portfolio snapshots by ID or filter criteria."
+	DescI2C                       = "Interact with I2C hardware devices exposed on the host."
+	DescSPI                       = "Interact with SPI hardware devices exposed on the host."
+	DescToolSearchRegex           = "Discover hidden MCP tools by regex search when tool discovery is enabled."
+	DescToolSearchBM25            = "Discover hidden MCP tools by semantic ranking when tool discovery is enabled."
+	DescGetPnLSummary             = "Compute cost basis and unrealized (and optionally realized) PnL for all currently held assets across one or all exchange accounts."
+	DescGetPnLDetail              = "Per-symbol PnL audit: replay buy/sell trade history to show realized profit, average cost, current unrealized gain/loss, and fees paid."
+	DescFuturesSetLeverage        = "Set leverage for a Binance or OKX perpetual futures symbol."
+	DescFuturesOpenPosition       = "Open a Binance or OKX long/short perpetual futures position with leverage and optional stop-loss/take-profit orders."
+	DescFuturesGetOrder           = "Retrieve a Binance or OKX futures order by ID."
+	DescFuturesGetPositions       = "List Binance or OKX futures positions with leverage, margin, unrealized PnL, and realized PnL when reported."
+	DescFuturesGetFunding         = "Check current funding rate and optional funding-fee history for a Binance or OKX perpetual futures symbol. Uses public API — no credentials required."
+	DescFuturesValidateMarket     = "Validate that a Binance or OKX perpetual swap symbol is active and tradeable, with contract size, leverage limits, and fee information. Uses public API — no credentials required."
+	DescFuturesRiskSummary        = "Summarize all open futures positions: margin health, liquidation distance, unrealized PnL, and margin ratio for each position."
+	DescFuturesEstimateFundingFee = "Estimate the next funding payment for open Binance or OKX futures positions."
+	DescFuturesClosePosition      = "Close a Binance or OKX futures position with a reduce-only order. Requires explicit confirm=true."
+	DescFuturesReducePosition     = "Reduce an open Binance or OKX futures position by a specified amount or percentage. Requires confirm=true."
+	DescFuturesModifyProtection   = "Create, replace, or move stop-loss and take-profit protection orders on an open futures position."
+	DescFuturesCancelOrders       = "Cancel Binance or OKX futures orders by order ID, symbol, or order type (all or protection)."
+	DescFuturesEmergencyFlatten   = "Cancel all futures orders and close all open positions on a Binance or OKX account. Requires confirm=true."
+	DescFundingRateHistory        = "Fetch public funding rate history for a perpetual futures symbol and compute rolling statistics (mean, max, min, volatility) over 3d/7d/14d windows. Uses public API — no credentials required."
+
+	// DCA tool descriptions
+	DescCreateDCAPlan   = "Create a new Dollar Cost Averaging plan to automatically invest a fixed amount on a schedule."
+	DescListDCAPlans    = "List all configured DCA plans with their status, schedule, and recent execution history."
+	DescUpdateDCAPlan   = "Update an existing DCA plan's amount, schedule, or other parameters."
+	DescDeleteDCAPlan   = "Delete a DCA plan. In-flight executions are not cancelled."
+	DescExecuteDCAOrder = "Manually trigger a DCA plan order execution outside its normal schedule."
+	DescGetDCAHistory   = "Retrieve the execution history for a DCA plan: amounts invested, prices paid, and timestamps."
+	DescGetDCASummary   = "Summarize a DCA plan's performance: total invested, average cost, current value, and unrealized PnL."
+
+	// Delta-Neutral tool descriptions
+	DescCreateDeltaNeutralPlan        = "Create a new delta-neutral funding strategy plan combining spot buy + perpetual short positions."
+	DescListDeltaNeutralPlans         = "List all configured delta-neutral plans with their status, asset, and monitor interval."
+	DescGetDeltaNeutralPlan           = "Get details of a single delta-neutral plan including its latest monitor snapshot and alert."
+	DescUpdateDeltaNeutralPlan        = "Update an existing delta-neutral plan's settings: monitor interval, risk thresholds, or notification routing."
+	DescDeleteDeltaNeutralPlan        = "Delete a delta-neutral plan and cancel its cron job. Reject if the plan is active — pause first."
+	DescGetDeltaNeutralSummary        = "Get the economic summary for an existing delta-neutral plan, OR project yield without any plan (dry-run). Dry-run: pass spot_provider + spot_symbol + capital_usdt (no plan_id) to get projected annual income, daily yield, and breakeven instantly. Active plans: live health, P&L breakdown, daily yield. Draft/ready plans: live-fetched projection."
+	DescGetDeltaNeutralHistory        = "Get paginated monitor snapshots and alerts for a delta-neutral plan."
+	DescGetDeltaNeutralSpread         = "Fetch live entry/exit spread and annualized funding APR (3d/7d/14d/30d windows) for a given spot + futures symbol pair. Entry spread = (futures - spot)/spot * 100. Useful for monitoring spread dynamics and funding rate trends before building or entering a delta-neutral plan."
+	DescGetDeltaNeutralEarn           = "Fetch flexible-savings (earn) APY for a spot asset: the current best rate plus trailing 3M/6M/12M averages and min/max from the exchange's earn rate history. Use to gauge the earn leg of a delta-neutral position. OKX rates are public; Binance Simple Earn needs credentials."
+	DescPrepareDeltaNeutralPlan       = "Validate a draft delta-neutral plan and promote it to 'ready' status. Runs sanity checks (capital, leverage policy, symbol format, cross-exchange warning) without placing any orders. Safe to call multiple times; idempotent on already-ready plans."
+	DescOpenDeltaNeutralPosition      = "Open a delta-neutral position (approval-mode two-leg execution: futures hedge + spot buy). HIGHEST-RISK: requires leverage opt-in, permission, daily-loss, rate-limit gates. Dry-run (confirm=false) shows review; confirm=true executes."
+	DescUnwindDeltaNeutralPosition    = "Close a delta-neutral position (unwind both legs: reduce-only futures close + spot sell). Recovery tool for unhedged exposure or manual closure. Approval-mode: confirm=true required."
+	DescResizeDeltaNeutralPosition    = "Adjust an active delta-neutral position by resizing both legs equally (approval-mode). Maintains delta-neutrality (equal notional on both legs). Partial fill → recovery_required. Dry-run (confirm=false) shows review; confirm=true executes."
+	DescRenderDeltaNeutralYieldChart  = "Render and send the Yield History chart (funding rate, funding APY%, earn APY%, combined APY%) for a delta-neutral plan as a PNG image to the active chat. Selectable time period (7d/14d/30d/3m/6m/all) and optional column filter."
+	DescScanDeltaNeutralOpportunities = "Scan the top N crypto assets by market cap for delta-neutral funding-carry opportunities: batch-fetch funding rates, optionally compute stability stats, and return a ranked table. Provider may be 'binance', 'okx', or empty/'all' to scan every supported exchange and combine the results (each row tagged with its exchange). Sortable via sort_by (funding_rate [default], apr, 7d_avg, 14d_avg) and sort_order (desc [default], asc) on SIGNED values — default funding_rate desc puts most-positive funding first, most-negative last; sorting by 7d_avg/14d_avg computes stability for all candidates. Each row has a Spot column flagging whether the asset also has a spot pair on its exchange (perp-but-no-spot rows are kept and marked NO-SPOT, not filtered out). Funding-only screen — validate with risk tools before trading."
+
+	// Earn tool descriptions
+	DescEarnOverview       = "View all flexible earn products available on an exchange and current earn positions held. Lists APY, minimum subscription amounts, and auto-subscription status. Provider may be 'binance', 'okx', or empty/'all' to query all supported exchanges. Positions require API keys; products may be public."
+	DescManageEarnPosition = "Subscribe to, redeem from, or configure auto-subscription on a flexible earn product. Actions: 'subscribe' (invest amount with optional auto-renewal), 'redeem' (withdraw amount or all), 'set_auto_subscribe' (enable/disable auto-renewal). Approval-mode: confirm=false shows dry-run review, confirm=true executes the transaction."
+
+	// Options tool descriptions (single-leg only)
+	DescOptionQuote       = "Fetch market data for options contracts including price, greeks (delta, gamma, theta, vega, rho), implied volatility, and open interest. Requires underlying symbol, expiry date (yyyy-MM-dd), strike price, and option type (CALL/PUT)."
+	DescOptionCreateOrder = "Place a single-leg options order. Supports LIMIT, STOP_LOSS, STOP_LOSS_LIMIT order types with DAY or GTC time-in-force (GTC rejected on SELL). Requires explicit confirm=true. Single-leg only; multi-leg spreads not supported."
+	DescOptionCancelOrder = "Cancel an open options order by client order ID."
+	DescOptionGetOrder    = "Retrieve a single options order by client order ID, including status, fill quantity, and execution details."
+	DescOptionOpenOrders  = "List all open options orders on the account with current status and fill information."
+)
