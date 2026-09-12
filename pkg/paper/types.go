@@ -79,7 +79,17 @@ type Instrument struct {
 	ContractSize  float64 `json:"contract_size"`
 	MinimumLot    float64 `json:"minimum_lot"`
 	LotStep       float64 `json:"lot_step"`
+	MaximumLot    float64 `json:"maximum_lot"`
 	PriceDigits   int     `json:"price_digits"`
+}
+
+// AuditEvent records a safety-relevant paper account mutation.
+type AuditEvent struct {
+	ID        string    `json:"id"`
+	AccountID string    `json:"account_id"`
+	Action    string    `json:"action"`
+	EntityID  string    `json:"entity_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Quote is a point-in-time bid and ask pair.
