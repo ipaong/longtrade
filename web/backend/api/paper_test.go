@@ -68,7 +68,7 @@ func TestPaperAccountAndReset(t *testing.T) {
 	}
 
 	// POST /api/paper/account/reset
-	resetReq := httptest.NewRequest(http.MethodPost, "/api/paper/account/reset", bytes.NewBufferString(`{"starting_balance": 10000}`))
+	resetReq := httptest.NewRequest(http.MethodPost, "/api/paper/account/reset", bytes.NewBufferString(`{}`))
 	resetRec := httptest.NewRecorder()
 	mux.ServeHTTP(resetRec, resetReq)
 
@@ -217,7 +217,7 @@ func TestPaperPositionProtectionAndClose(t *testing.T) {
 	}
 
 	// Close position
-	closeBody := bytes.NewBufferString(`{"reason": "manual"}`)
+	closeBody := bytes.NewBufferString(`{"client_request_id":"close_pos_test_01","reason":"manual"}`)
 	closeReq := httptest.NewRequest(http.MethodPost, "/api/paper/positions/"+pos.ID+"/close", closeBody)
 	closeRec := httptest.NewRecorder()
 	mux.ServeHTTP(closeRec, closeReq)
@@ -300,7 +300,7 @@ func TestPaperErrorFormat(t *testing.T) {
 	}
 
 	// 2. Not found position close -> 404 NOT_FOUND
-	notFoundReq := httptest.NewRequest(http.MethodPost, "/api/paper/positions/non-existent/close", nil)
+	notFoundReq := httptest.NewRequest(http.MethodPost, "/api/paper/positions/non-existent/close", bytes.NewBufferString(`{"client_request_id":"close_missing","reason":"manual"}`))
 	notFoundRec := httptest.NewRecorder()
 	mux.ServeHTTP(notFoundRec, notFoundReq)
 
@@ -313,5 +313,123 @@ func TestPaperErrorFormat(t *testing.T) {
 	}
 	if nfResp.Error.Code != "NOT_FOUND" {
 		t.Errorf("error.code = %q; want NOT_FOUND", nfResp.Error.Code)
+	}
+}
+
+func TestPaperTradeConfirmRequiresIdempotencyKeyAndRejectsDuplicate(t *testing.T) {
+	_, mux, engine, _, _ := setupPaperTestEnv(t)
+
+	prepare := func() paper.Proposal {
+		req := httptest.NewRequest(http.MethodPost, "/api/paper/trade/prepare", bytes.NewBufferString(
+			`{"symbol":"XAUUSD","side":"BUY","volume_lots":0.01}`))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("prepare status = %d; body = %s", rec.Code, rec.Body.String())
+		}
+		var proposal paper.Proposal
+		if err := json.NewDecoder(rec.Body).Decode(&proposal); err != nil {
+			t.Fatal(err)
+		}
+		return proposal
+	}
+
+	missingKey := prepare()
+	req := httptest.NewRequest(http.MethodPost, "/api/paper/trade/confirm", bytes.NewBufferString(
+		`{"proposal_id":"`+missingKey.ID+`"}`))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	assertPaperError(t, rec, http.StatusBadRequest, "VALIDATION_ERROR", "client_request_id")
+
+	if _, err := engine.OpenPosition(context.Background(), paper.OpenPositionRequest{
+		ClientRequestID: "already-used", Symbol: paper.SymbolXAUUSD, Side: paper.SideBuy, VolumeLots: .01,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	duplicate := prepare()
+	req = httptest.NewRequest(http.MethodPost, "/api/paper/trade/confirm", bytes.NewBufferString(
+		`{"proposal_id":"`+duplicate.ID+`","client_request_id":"already-used"}`))
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	assertPaperError(t, rec, http.StatusConflict, "CONFLICT", "client_request_id")
+}
+
+func TestPaperProposalStoreConsumeIsAtomicAndExpiresAtBoundary(t *testing.T) {
+	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	store := newProposalStore()
+	store.now = func() time.Time { return now }
+	proposal := paper.Proposal{ID: "prop_once", ExpiresAt: now.Add(time.Second)}
+	store.Put(proposal)
+	if _, ok := store.Consume(proposal.ID); !ok {
+		t.Fatal("first Consume() did not return proposal")
+	}
+	if _, ok := store.Consume(proposal.ID); ok {
+		t.Fatal("second Consume() returned an already-consumed proposal")
+	}
+
+	proposal.ID = "prop_expired"
+	store.Put(proposal)
+	now = proposal.ExpiresAt
+	if _, ok := store.Consume(proposal.ID); ok {
+		t.Fatal("Consume() returned proposal at expiration boundary")
+	}
+}
+
+func TestPaperRequestValidationContracts(t *testing.T) {
+	_, mux, _, _, _ := setupPaperTestEnv(t)
+	tests := []struct {
+		name, method, path, body, field string
+	}{
+		{"invalid trade limit", http.MethodGet, "/api/paper/trades?limit=zero", "", "limit"},
+		{"excessive trade limit", http.MethodGet, "/api/paper/trades?limit=501", "", "limit"},
+		{"malformed reset", http.MethodPost, "/api/paper/reset", "{", ""},
+		{"unknown prepare field", http.MethodPost, "/api/paper/trade/prepare", `{"symbol":"XAUUSD","side":"buy","volume_lots":.01,"live":true}`, ""},
+		{"malformed close", http.MethodPost, "/api/paper/positions/id/close", "{", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.path, bytes.NewBufferString(tt.body))
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			assertPaperError(t, rec, http.StatusBadRequest, "VALIDATION_ERROR", tt.field)
+		})
+	}
+}
+
+func TestPaperStaleQuoteContract(t *testing.T) {
+	_, mux, _, _, quotes := setupPaperTestEnv(t)
+	quotes.SetQuote(paper.Quote{
+		Symbol: paper.SymbolXAUUSD,
+		Bid:    2400,
+		Ask:    2400.5,
+		AsOf:   time.Now().UTC().Add(-time.Minute),
+	})
+	for _, tc := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodGet, "/api/paper/account", ""},
+		{http.MethodGet, "/api/paper/positions", ""},
+		{http.MethodPost, "/api/paper/trade/prepare", `{"symbol":"XAUUSD","side":"buy","volume_lots":0.01}`},
+	} {
+		req := httptest.NewRequest(tc.method, tc.path, bytes.NewBufferString(tc.body))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		assertPaperError(t, rec, http.StatusServiceUnavailable, "QUOTE_STALE", "")
+	}
+}
+
+func assertPaperError(t *testing.T, rec *httptest.ResponseRecorder, status int, code, field string) {
+	t.Helper()
+	if rec.Code != status {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, status, rec.Body.String())
+	}
+	var response PaperErrorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if response.Error.Code != code || response.Error.Field != field {
+		t.Fatalf("error = %#v, want code=%q field=%q", response.Error, code, field)
 	}
 }

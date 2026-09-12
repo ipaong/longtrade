@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"sync"
@@ -48,43 +49,42 @@ func (s *defaultQuoteSource) Quote(_ context.Context, symbol string) (paper.Quot
 type proposalStore struct {
 	mu        sync.RWMutex
 	proposals map[string]paper.Proposal
+	now       func() time.Time
 }
 
 func newProposalStore() *proposalStore {
 	return &proposalStore{
 		proposals: make(map[string]paper.Proposal),
+		now:       time.Now,
 	}
 }
 
 func (s *proposalStore) Put(p paper.Proposal) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := time.Now().UTC()
+	now := s.now().UTC()
 	for k, v := range s.proposals {
-		if now.After(v.ExpiresAt) {
+		if !now.Before(v.ExpiresAt) {
 			delete(s.proposals, k)
 		}
 	}
 	s.proposals[p.ID] = p
 }
 
-func (s *proposalStore) Get(id string) (paper.Proposal, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+// Consume atomically retrieves and removes a proposal. A proposal can therefore
+// result in at most one execution even when confirmations arrive concurrently.
+func (s *proposalStore) Consume(id string) (paper.Proposal, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	p, ok := s.proposals[id]
 	if !ok {
 		return paper.Proposal{}, false
 	}
-	if time.Now().UTC().After(p.ExpiresAt) {
+	delete(s.proposals, id)
+	if !s.now().UTC().Before(p.ExpiresAt) {
 		return paper.Proposal{}, false
 	}
 	return p, true
-}
-
-func (s *proposalStore) Delete(id string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.proposals, id)
 }
 
 // Structured error response envelope.
@@ -108,6 +108,18 @@ func writePaperError(w http.ResponseWriter, status int, code, message, field str
 			Field:   field,
 		},
 	})
+}
+
+func decodePaperJSON(r *http.Request, dst any) error {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(dst); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("request body must contain exactly one JSON object")
+	}
+	return nil
 }
 
 // SetPaperEngine installs a pre-configured engine and store for testing.
@@ -214,11 +226,12 @@ func (h *Handler) handlePaperResetAccount(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var req struct {
-		StartingBalance float64 `json:"starting_balance"`
-	}
-	if r.Body != nil && r.ContentLength > 0 {
-		_ = json.NewDecoder(r.Body).Decode(&req)
+	var req struct{}
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := decodePaperJSON(r, &req); err != nil {
+			writePaperError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid json request body", "")
+			return
+		}
 	}
 
 	now := time.Now().UTC()
@@ -275,9 +288,12 @@ func (h *Handler) handlePaperGetTrades(w http.ResponseWriter, r *http.Request) {
 
 	limit := 50
 	if lStr := r.URL.Query().Get("limit"); lStr != "" {
-		if l, err := strconv.Atoi(lStr); err == nil && l > 0 {
-			limit = l
+		l, parseErr := strconv.Atoi(lStr)
+		if parseErr != nil || l <= 0 || l > 500 {
+			writePaperError(w, http.StatusBadRequest, "VALIDATION_ERROR", "limit must be between 1 and 500", "limit")
+			return
 		}
+		limit = l
 	}
 
 	trades, err := store.ListRecentTrades(r.Context(), paper.DefaultAccountID, limit)
@@ -294,11 +310,11 @@ func (h *Handler) handlePaperGetTrades(w http.ResponseWriter, r *http.Request) {
 }
 
 type prepareTradeRequest struct {
-	Symbol     string          `json:"symbol"`
-	Side       paper.Side      `json:"side"`
-	VolumeLots float64         `json:"volume_lots"`
-	StopLoss   *float64        `json:"stop_loss,omitempty"`
-	TakeProfit *float64        `json:"take_profit,omitempty"`
+	Symbol     string     `json:"symbol"`
+	Side       paper.Side `json:"side"`
+	VolumeLots float64    `json:"volume_lots"`
+	StopLoss   *float64   `json:"stop_loss,omitempty"`
+	TakeProfit *float64   `json:"take_profit,omitempty"`
 }
 
 // handlePaperPrepareTrade creates a temporary trade proposal bound to current quote.
@@ -310,7 +326,7 @@ func (h *Handler) handlePaperPrepareTrade(w http.ResponseWriter, r *http.Request
 	}
 
 	var req prepareTradeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodePaperJSON(r, &req); err != nil {
 		writePaperError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid json request body", "")
 		return
 	}
@@ -334,7 +350,7 @@ func (h *Handler) handlePaperPrepareTrade(w http.ResponseWriter, r *http.Request
 			writePaperError(w, http.StatusServiceUnavailable, "QUOTE_STALE", err.Error(), "")
 			return
 		}
-		writePaperError(w, http.StatusBadRequest, "VALIDATION_ERROR", err.Error(), "")
+		writePaperError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error(), "")
 		return
 	}
 
@@ -351,14 +367,14 @@ type confirmTradeRequest struct {
 
 // handlePaperConfirmTrade confirms and executes a previously prepared trade proposal.
 func (h *Handler) handlePaperConfirmTrade(w http.ResponseWriter, r *http.Request) {
-	engine, _, proposals, err := h.getPaperComponents()
+	engine, store, proposals, err := h.getPaperComponents()
 	if err != nil {
 		writePaperError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error(), "")
 		return
 	}
 
 	var req confirmTradeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodePaperJSON(r, &req); err != nil {
 		writePaperError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid json request body", "")
 		return
 	}
@@ -366,22 +382,35 @@ func (h *Handler) handlePaperConfirmTrade(w http.ResponseWriter, r *http.Request
 		writePaperError(w, http.StatusBadRequest, "VALIDATION_ERROR", "proposal_id is required", "proposal_id")
 		return
 	}
+	if req.ClientRequestID == "" {
+		writePaperError(w, http.StatusBadRequest, "VALIDATION_ERROR", "client_request_id is required", "client_request_id")
+		return
+	}
 
-	proposal, ok := proposals.Get(req.ProposalID)
+	proposal, ok := proposals.Consume(req.ProposalID)
 	if !ok {
 		writePaperError(w, http.StatusGone, "EXPIRED", "proposal has expired or does not exist", "proposal_id")
 		return
 	}
 
-	clientRequestID := req.ClientRequestID
-	if clientRequestID == "" {
-		clientRequestID = proposal.ID
-	}
-
 	openReq := proposal.Request
-	openReq.ClientRequestID = clientRequestID
+	openReq.ClientRequestID = req.ClientRequestID
 
+	// Serialize the existence check with execution. Engine.OpenPosition remains
+	// idempotent for domain callers, while the HTTP contract deliberately reports
+	// a reused client_request_id as a conflict.
+	h.paperConfirmMu.Lock()
+	if _, lookupErr := store.GetOrderByClientRequestID(r.Context(), req.ClientRequestID); lookupErr == nil {
+		h.paperConfirmMu.Unlock()
+		writePaperError(w, http.StatusConflict, "CONFLICT", "duplicate client request id", "client_request_id")
+		return
+	} else if !errors.Is(lookupErr, paper.ErrNotFound) {
+		h.paperConfirmMu.Unlock()
+		writePaperError(w, http.StatusInternalServerError, "INTERNAL_ERROR", lookupErr.Error(), "")
+		return
+	}
 	position, err := engine.OpenPosition(r.Context(), openReq)
+	h.paperConfirmMu.Unlock()
 	if err != nil {
 		if errors.Is(err, paper.ErrDuplicateClientRequestID) {
 			writePaperError(w, http.StatusConflict, "CONFLICT", "duplicate client request id", "client_request_id")
@@ -396,11 +425,9 @@ func (h *Handler) handlePaperConfirmTrade(w http.ResponseWriter, r *http.Request
 			writePaperError(w, http.StatusServiceUnavailable, "QUOTE_STALE", err.Error(), "")
 			return
 		}
-		writePaperError(w, http.StatusBadRequest, "VALIDATION_ERROR", err.Error(), "")
+		writePaperError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error(), "")
 		return
 	}
-
-	proposals.Delete(req.ProposalID)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -428,11 +455,15 @@ func (h *Handler) handlePaperClosePosition(w http.ResponseWriter, r *http.Reques
 	}
 
 	var req closePositionRequest
-	if r.Body != nil && r.ContentLength > 0 {
-		_ = json.NewDecoder(r.Body).Decode(&req)
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := decodePaperJSON(r, &req); err != nil {
+			writePaperError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid json request body", "")
+			return
+		}
 	}
 	if req.ClientRequestID == "" {
-		req.ClientRequestID = "close_" + positionID + "_" + strconv.FormatInt(time.Now().UnixNano(), 10)
+		writePaperError(w, http.StatusBadRequest, "VALIDATION_ERROR", "client_request_id is required", "client_request_id")
+		return
 	}
 	if req.Reason == "" {
 		req.Reason = paper.CloseReasonManual
@@ -453,7 +484,7 @@ func (h *Handler) handlePaperClosePosition(w http.ResponseWriter, r *http.Reques
 			writePaperError(w, http.StatusBadRequest, "VALIDATION_ERROR", validationErr.Message, validationErr.Field)
 			return
 		}
-		writePaperError(w, http.StatusBadRequest, "VALIDATION_ERROR", err.Error(), "")
+		writePaperError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error(), "")
 		return
 	}
 
@@ -481,7 +512,7 @@ func (h *Handler) handlePaperUpdateProtection(w http.ResponseWriter, r *http.Req
 	}
 
 	var req updateProtectionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodePaperJSON(r, &req); err != nil {
 		writePaperError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid json request body", "")
 		return
 	}
@@ -492,12 +523,16 @@ func (h *Handler) handlePaperUpdateProtection(w http.ResponseWriter, r *http.Req
 			writePaperError(w, http.StatusNotFound, "NOT_FOUND", "position not found", "id")
 			return
 		}
+		if errors.Is(err, paper.ErrQuoteStale) {
+			writePaperError(w, http.StatusServiceUnavailable, "QUOTE_STALE", err.Error(), "")
+			return
+		}
 		var validationErr *paper.ValidationError
 		if errors.As(err, &validationErr) {
 			writePaperError(w, http.StatusBadRequest, "VALIDATION_ERROR", validationErr.Message, validationErr.Field)
 			return
 		}
-		writePaperError(w, http.StatusBadRequest, "VALIDATION_ERROR", err.Error(), "")
+		writePaperError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error(), "")
 		return
 	}
 

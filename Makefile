@@ -401,3 +401,9 @@ help:
 	@echo "  Binary: $(BINARY_PATH)"
 	@echo "  Install Prefix: $(INSTALL_PREFIX)"
 	@echo "  Workspace: $(WORKSPACE_DIR)"
+.PHONY: longtrade-check
+longtrade-check:
+	go test ./pkg/paper/... ./pkg/mt5bridge ./web/backend/api/... -run 'TestPaper|TestReadOnly|TestRejects'
+	cd web/frontend && npm run build
+	python3 -m py_compile mt5_bridge/app.py
+	@if rg -n 'order_send|OrderSend' mt5_bridge pkg/mt5bridge; then echo 'unsafe MT5 write symbol found'; exit 1; else echo 'MT5 bridge is read-only'; fi

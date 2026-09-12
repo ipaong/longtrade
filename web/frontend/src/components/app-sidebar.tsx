@@ -1,25 +1,26 @@
 import { IconChevronRight } from "@tabler/icons-react"
-import { AlertDot } from "@/components/ui/alert-dot"
 import {
   IconAtom,
   IconBrain,
-  IconBuildingBank,
+  IconChartPie,
   IconChevronsDown,
   IconChevronsUp,
   IconClock,
   IconFileText,
+  IconFlask,
   IconKey,
   IconListDetails,
   IconMessageCircle,
   IconSettings,
   IconSparkles,
   IconTools,
-  IconFlask,
+  IconTrendingUp,
 } from "@tabler/icons-react"
 import { Link, useRouterState } from "@tanstack/react-router"
 import * as React from "react"
 import { useTranslation } from "react-i18next"
 
+import { AlertDot } from "@/components/ui/alert-dot"
 import {
   Collapsible,
   CollapsibleContent,
@@ -36,8 +37,8 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "@/components/ui/sidebar"
-import { useSidebarChannels } from "@/hooks/use-sidebar-channels"
 import { useSandboxStatus } from "@/hooks/use-sandbox-status"
+import { useSidebarChannels } from "@/hooks/use-sidebar-channels"
 
 interface NavItem {
   title: string
@@ -53,25 +54,6 @@ interface NavGroup {
   items: NavItem[]
   isChannelsGroup?: boolean
 }
-
-const baseNavGroups: Omit<NavGroup, "items">[] = [
-  {
-    label: "navigation.chat",
-    defaultOpen: true,
-  },
-  {
-    label: "navigation.model_group",
-    defaultOpen: true,
-  },
-  {
-    label: "navigation.agent_group",
-    defaultOpen: true,
-  },
-  {
-    label: "navigation.services",
-    defaultOpen: true,
-  },
-]
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const routerState = useRouterState()
@@ -111,9 +93,62 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       })
     }
 
+    const advancedItems: NavItem[] = [
+      {
+        title: "navigation.models",
+        url: "/models",
+        icon: IconAtom,
+        translateTitle: true,
+      },
+      {
+        title: "navigation.credentials",
+        url: "/credentials",
+        icon: IconKey,
+        translateTitle: true,
+      },
+      ...channelItems.map((item) => ({
+        title: item.title,
+        url: item.url,
+        icon: item.icon,
+        translateTitle: false,
+        badge: item.badge,
+      })),
+      {
+        title: "navigation.agent_config",
+        url: "/agent/config",
+        icon: IconFileText,
+        translateTitle: true,
+      },
+      {
+        title: "navigation.agent_memory",
+        url: "/agent/memory",
+        icon: IconBrain,
+        translateTitle: true,
+      },
+      {
+        title: "navigation.skills",
+        url: "/agent/skills",
+        icon: IconSparkles,
+        translateTitle: true,
+      },
+      {
+        title: "navigation.tools",
+        url: "/agent/tools",
+        icon: IconTools,
+        translateTitle: true,
+      },
+      {
+        title: "navigation.cron",
+        url: "/agent/cron",
+        icon: IconClock,
+        translateTitle: true,
+      },
+      ...servicesItems,
+    ]
     return [
       {
-        ...baseNavGroups[0],
+        label: "navigation.longtrade",
+        defaultOpen: true,
         items: [
           {
             title: "navigation.chat",
@@ -121,117 +156,24 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             icon: IconMessageCircle,
             translateTitle: true,
           },
-        ],
-      },
-      {
-        ...baseNavGroups[1],
-        items: [
           {
-            title: "navigation.models",
-            url: "/models",
-            icon: IconAtom,
+            title: "navigation.paper_portfolio",
+            url: "/portfolio",
+            icon: IconChartPie,
             translateTitle: true,
           },
           {
-            title: "navigation.credentials",
-            url: "/credentials",
-            icon: IconKey,
+            title: "navigation.try_trade",
+            url: "/try-trade",
+            icon: IconTrendingUp,
             translateTitle: true,
           },
         ],
       },
       {
-        label: "navigation.channels_group",
-        defaultOpen: true,
-        items: channelItems.map((item) => ({
-          title: item.title,
-          url: item.url,
-          icon: item.icon,
-          translateTitle: false,
-          badge: item.badge,
-        })),
-        isChannelsGroup: true,
-      },
-      {
-        label: "navigation.portfolios_group",
-        defaultOpen: true,
-        items: [
-          {
-            title: "navigation.portfolios_binance",
-            url: "/portfolios/binance",
-            icon: IconBuildingBank,
-            translateTitle: true,
-          },
-          {
-            title: "navigation.portfolios_okx",
-            url: "/portfolios/okx",
-            icon: IconBuildingBank,
-            translateTitle: true,
-          },
-          {
-            title: "navigation.portfolios_bitkub",
-            url: "/portfolios/bitkub",
-            icon: IconBuildingBank,
-            translateTitle: true,
-          },
-          {
-            title: "navigation.portfolios_binanceth",
-            url: "/portfolios/binanceth",
-            icon: IconBuildingBank,
-            translateTitle: true,
-          },
-          {
-            title: "navigation.portfolios_settrade",
-            url: "/portfolios/settrade",
-            icon: IconBuildingBank,
-            translateTitle: true,
-          },
-          {
-            title: "navigation.portfolios_webull",
-            url: "/portfolios/webull",
-            icon: IconBuildingBank,
-            translateTitle: true,
-          },
-        ],
-      },
-      {
-        ...baseNavGroups[2],
-        items: [
-          {
-            title: "navigation.agent_config",
-            url: "/agent/config",
-            icon: IconFileText,
-            translateTitle: true,
-          },
-          {
-            title: "navigation.agent_memory",
-            url: "/agent/memory",
-            icon: IconBrain,
-            translateTitle: true,
-          },
-          {
-            title: "navigation.skills",
-            url: "/agent/skills",
-            icon: IconSparkles,
-            translateTitle: true,
-          },
-          {
-            title: "navigation.tools",
-            url: "/agent/tools",
-            icon: IconTools,
-            translateTitle: true,
-          },
-          {
-            title: "navigation.cron",
-            url: "/agent/cron",
-            icon: IconClock,
-            translateTitle: true,
-          },
-        ],
-      },
-      {
-        ...baseNavGroups[3],
-        items: servicesItems,
+        label: "navigation.advanced",
+        defaultOpen: false,
+        items: advancedItems,
       },
     ]
   }, [channelItems, sandboxStatus?.enabled])
@@ -283,9 +225,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                   ? item.title
                                   : t(item.title)}
                               </span>
-                              {item.badge && (
-                                <AlertDot className="ml-auto" />
-                              )}
+                              {item.badge && <AlertDot className="ml-auto" />}
                             </Link>
                           </SidebarMenuButton>
                         </SidebarMenuItem>

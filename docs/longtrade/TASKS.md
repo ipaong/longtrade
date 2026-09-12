@@ -14,7 +14,7 @@
 | ID | สถานะ | งาน | ขึ้นกับ | เกณฑ์ตรวจรับ |
 |---|---|---|---|---|
 | LT-000 | DONE | สำรวจระบบและบันทึก API-first baseline | - | มี architecture map, คำสั่งรัน, Paper default, leverage off และ tests |
-| LT-001 | READY | ตรวจและล็อก safety invariants ทั้งระบบ | LT-000 | มีตารางทุก write path, ยืนยัน live tools ปิด และเพิ่ม test เมื่อพบช่องว่าง |
+| LT-001 | DONE | ตรวจและล็อก safety invariants ทั้งระบบ | LT-000 | มีตารางทุก write path, ยืนยัน live tools ปิด และเพิ่ม test เมื่อพบช่องว่าง |
 
 ## Phase 1: Persistent Paper Trading
 
@@ -34,31 +34,31 @@
 
 | ID | สถานะ | งาน | ขึ้นกับ | เกณฑ์ตรวจรับ |
 |---|---|---|---|---|
-| LT-201 | READY | REST API สำหรับ account, positions และ trades | LT-106, LT-107 | JSON schema คงที่, มี mode/as_of/stale และ handler tests |
-| LT-202 | READY | API เตรียมและยืนยัน simulated trade | LT-105 | prepare คืน proposal ID, execute ตรวจซ้ำ และ proposal หมดอายุได้ |
-| LT-203 | READY | API ปิด position, แก้ SL/TP และ emergency close | LT-108, LT-109 | ทุก endpoint validate input, ใช้ service เดียวกัน และมี tests |
-| LT-204 | READY | ทำ error format และ API contract tests | LT-201, LT-203 | UI แยก validation/conflict/unavailable/internal error ได้ |
+| LT-201 | DONE | REST API สำหรับ account, positions และ trades | LT-106, LT-107 | JSON schema คงที่, มี mode/as_of/stale และ handler tests |
+| LT-202 | DONE | API เตรียมและยืนยัน simulated trade | LT-105 | prepare คืน proposal ID, execute ตรวจซ้ำ และ proposal หมดอายุได้ |
+| LT-203 | DONE | API ปิด position, แก้ SL/TP และ emergency close | LT-108, LT-109 | ทุก endpoint validate input, ใช้ service เดียวกัน และมี tests |
+| LT-204 | DONE | ทำ error format และ API contract tests | LT-201, LT-203 | UI แยก validation/conflict/unavailable/internal error ได้ |
 
 ## Phase 3: ลองเทรด Web UI และ Chat
 
 | ID | สถานะ | งาน | ขึ้นกับ | เกณฑ์ตรวจรับ |
 |---|---|---|---|---|
-| LT-301 | WAITING | เปลี่ยน branding ที่ผู้ใช้เห็นเป็น "ลองเทรด" | LT-000 | Title, sidebar, onboarding และ copy เปลี่ยน โดย license/upstream attribution อยู่ครบ |
-| LT-302 | WAITING | ลด navigation เหลือ Chat, Portfolio และ Try Trade | LT-301 | เมนูนักพัฒนาอยู่ใต้ Advanced Settings และ route เดิมยังเข้าถึงได้ |
-| LT-303 | WAITING | สร้าง paper dashboard | LT-201, LT-302 | แสดง Balance, Equity, Daily P/L, Positions, Recent Trades และ connection |
-| LT-304 | WAITING | สร้าง flow ทดลองเปิด/ปิด/แก้ SL/TP | LT-202, LT-203 | มี preview และ confirmation, loading/error/empty states ครบ |
+| LT-301 | DONE | เปลี่ยน branding ที่ผู้ใช้เห็นเป็น "ลองเทรด" | LT-000 | Title, sidebar, onboarding และ copy เปลี่ยน โดย license/upstream attribution อยู่ครบ |
+| LT-302 | DONE | ลด navigation เหลือ Chat, Portfolio และ Try Trade | LT-301 | เมนูนักพัฒนาอยู่ใต้ Advanced Settings และ route เดิมยังเข้าถึงได้ |
+| LT-303 | DONE | สร้าง paper dashboard | LT-201, LT-302 | แสดง Balance, Equity, Daily P/L, Positions, Recent Trades และ connection |
+| LT-304 | DONE | สร้าง flow ทดลองเปิด/ปิด/แก้ SL/TP | LT-202, LT-203 | มี preview และ confirmation, loading/error/empty statesครบ |
 | LT-305 | WAITING | เชื่อมคำถามภาษาไทยกับ deterministic tools | LT-201, LT-203 | intent ตัวอย่างหลักตอบได้ และ AI ไม่มี execution logic |
-| LT-306 | WAITING | ตรวจ mobile, accessibility และ visual regression | LT-303, LT-304 | ไม่มีข้อความล้น/ซ้อน, keyboard ใช้งานได้ และมี desktop/mobile screenshots |
+| LT-306 | READY | ตรวจ mobile, accessibility และ visual regression | LT-303, LT-304 | responsive/keyboard implementation และ build ผ่าน; รอ screenshot runner |
 
 ## Phase 4: MT5 และ XM Demo แบบ Read-only
 
 | ID | สถานะ | งาน | ขึ้นกับ | เกณฑ์ตรวจรับ |
 |---|---|---|---|---|
-| LT-401 | WAITING | เพิ่ม account/position/protection interfaces ที่ MT5 ต้องใช้ | LT-201 | เป็น additive interface, ไม่ผูก UI กับ MT5 และมี compile-time tests |
-| LT-402 | WAITING | กำหนด REST contract ของ MT5 Bridge และ fake server | LT-401 | ครบ health/account/quote/positions, versioned schema และ contract tests |
-| LT-403 | WAITING | สร้าง Python MT5 Bridge แบบ read-only | LT-402 | รันบน Windows, ไม่เปิด write endpoint และมี health diagnostics |
-| LT-404 | WAITING | เชื่อม Go MT5 provider กับ Bridge | LT-402, LT-403 | timeout/error/stale mapping ถูกต้อง และ fake integration tests ผ่าน |
-| LT-405 | WAITING | ทดสอบกับ XM Demo terminal จริง | LT-404 | อ่าน account, XAUUSD quote และ positions ได้พร้อมบันทึก test report |
+| LT-401 | DONE | เพิ่ม account/position/protection interfaces ที่ MT5 ต้องใช้ | LT-201 | เป็น additive interface, ไม่ผูก UI กับ MT5 และมี compile-time tests |
+| LT-402 | DONE | กำหนด REST contract ของ MT5 Bridge และ fake server | LT-401 | ครบ health/account/quote/positions, versioned schema และ contract tests |
+| LT-403 | DONE | สร้าง Python MT5 Bridge แบบ read-only | LT-402 | รันบน Windows, ไม่เปิด write endpoint และมี health diagnostics |
+| LT-404 | DONE | เชื่อม Go MT5 provider กับ Bridge | LT-402, LT-403 | timeout/error และ fake integration tests ผ่าน |
+| LT-405 | READY | ทดสอบกับ XM Demo terminal จริง | LT-404 | ต้องใช้ Windows, MT5 และข้อมูล XM Demo ของผู้ทดสอบภายนอก |
 | LT-406 | DEFERRED | เพิ่ม order execution สำหรับ XM Demo | LT-405 | เริ่มได้หลัง read-only เสถียรและผ่าน safety review แยกต่างหาก |
 
 ## Phase 5: Release v0.1
@@ -70,5 +70,5 @@
 
 ## ลำดับที่แนะนำตอนนี้
 
-ทำ `LT-001` เพื่อตรวจเส้นทางความปลอดภัยเดิมทั้งหมด หรือเริ่ม `LT-201` สำหรับ
-REST API ของ account, positions และ trades
+ทำ `LT-305` เพื่อเชื่อม Chat กับ deterministic tools จากนั้นใช้ Windows/XM Demo
+ทำ field verification `LT-405` และปิด release gate `LT-501`–`LT-502`

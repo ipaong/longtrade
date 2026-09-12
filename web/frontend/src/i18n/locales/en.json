@@ -24,7 +24,11 @@
     "cron": "Cron Jobs",
     "pairing": "Pairing Requests",
     "agent_config": "Config",
-    "agent_memory": "Memory"
+    "agent_memory": "Memory",
+    "longtrade": "Try Trade",
+    "paper_portfolio": "Paper portfolio",
+    "try_trade": "Try trade",
+    "advanced": "Advanced settings"
   },
   "chat": {
     "welcome": "How can I help you today?",

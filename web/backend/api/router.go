@@ -30,6 +30,7 @@ type Handler struct {
 	sessions                   *middleware.SessionStore
 	dashboardPasswordHash      string
 	paperMu                    sync.Mutex
+	paperConfirmMu             sync.Mutex
 	paperEngine                *paper.Engine
 	paperStore                 *paper.Store
 	paperQuotes                paper.QuoteSource

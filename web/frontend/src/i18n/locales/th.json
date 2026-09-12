@@ -24,7 +24,11 @@
     "cron": "งานตามตาราง",
     "pairing": "คำขอจับคู่",
     "agent_config": "คอนฟิก",
-    "agent_memory": "หน่วยความจำ"
+    "agent_memory": "หน่วยความจำ",
+    "longtrade": "ลองเทรด",
+    "paper_portfolio": "พอร์ตทดลอง",
+    "try_trade": "ลองเทรด",
+    "advanced": "ตั้งค่าขั้นสูง"
   },
   "chat": {
     "welcome": "วันนี้ให้ฉันช่วยอะไรได้บ้าง?",

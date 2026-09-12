@@ -16,8 +16,10 @@ import { Route as ConfigRouteImport } from './routes/config'
 import { Route as CredentialsRouteImport } from './routes/credentials'
 import { Route as LogsRouteImport } from './routes/logs'
 import { Route as ModelsRouteImport } from './routes/models'
+import { Route as PortfolioRouteImport } from './routes/portfolio'
 import { Route as PortfoliosRouteRouteImport } from './routes/portfolios/route'
 import { Route as SandboxRouteImport } from './routes/sandbox'
+import { Route as TryTradeRouteImport } from './routes/try-trade'
 import { Route as AgentConfigRouteImport } from './routes/agent/config'
 import { Route as AgentCronRouteImport } from './routes/agent/cron'
 import { Route as AgentMemoryRouteImport } from './routes/agent/memory'
@@ -63,6 +65,11 @@ const ModelsRoute = ModelsRouteImport.update({
   path: '/models',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PortfolioRoute = PortfolioRouteImport.update({
+  id: '/portfolio',
+  path: '/portfolio',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PortfoliosRouteRoute = PortfoliosRouteRouteImport.update({
   id: '/portfolios',
   path: '/portfolios',
@@ -71,6 +78,11 @@ const PortfoliosRouteRoute = PortfoliosRouteRouteImport.update({
 const SandboxRoute = SandboxRouteImport.update({
   id: '/sandbox',
   path: '/sandbox',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TryTradeRoute = TryTradeRouteImport.update({
+  id: '/try-trade',
+  path: '/try-trade',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AgentConfigRoute = AgentConfigRouteImport.update({
@@ -128,7 +140,9 @@ export interface FileRoutesByFullPath {
   '/credentials': typeof CredentialsRoute
   '/logs': typeof LogsRoute
   '/models': typeof ModelsRoute
+  '/portfolio': typeof PortfolioRoute
   '/sandbox': typeof SandboxRoute
+  '/try-trade': typeof TryTradeRoute
   '/agent/config': typeof AgentConfigRoute
   '/agent/cron': typeof AgentCronRoute
   '/agent/memory': typeof AgentMemoryRoute
@@ -148,7 +162,9 @@ export interface FileRoutesByTo {
   '/credentials': typeof CredentialsRoute
   '/logs': typeof LogsRoute
   '/models': typeof ModelsRoute
+  '/portfolio': typeof PortfolioRoute
   '/sandbox': typeof SandboxRoute
+  '/try-trade': typeof TryTradeRoute
   '/agent/config': typeof AgentConfigRoute
   '/agent/cron': typeof AgentCronRoute
   '/agent/memory': typeof AgentMemoryRoute
@@ -169,7 +185,9 @@ export interface FileRoutesById {
   '/credentials': typeof CredentialsRoute
   '/logs': typeof LogsRoute
   '/models': typeof ModelsRoute
+  '/portfolio': typeof PortfolioRoute
   '/sandbox': typeof SandboxRoute
+  '/try-trade': typeof TryTradeRoute
   '/agent/config': typeof AgentConfigRoute
   '/agent/cron': typeof AgentCronRoute
   '/agent/memory': typeof AgentMemoryRoute
@@ -191,7 +209,9 @@ export interface FileRouteTypes {
     | '/credentials'
     | '/logs'
     | '/models'
+    | '/portfolio'
     | '/sandbox'
+    | '/try-trade'
     | '/agent/config'
     | '/agent/cron'
     | '/agent/memory'
@@ -211,7 +231,9 @@ export interface FileRouteTypes {
     | '/credentials'
     | '/logs'
     | '/models'
+    | '/portfolio'
     | '/sandbox'
+    | '/try-trade'
     | '/agent/config'
     | '/agent/cron'
     | '/agent/memory'
@@ -231,7 +253,9 @@ export interface FileRouteTypes {
     | '/credentials'
     | '/logs'
     | '/models'
+    | '/portfolio'
     | '/sandbox'
+    | '/try-trade'
     | '/agent/config'
     | '/agent/cron'
     | '/agent/memory'
@@ -252,7 +276,9 @@ export interface RootRouteChildren {
   CredentialsRoute: typeof CredentialsRoute
   LogsRoute: typeof LogsRoute
   ModelsRoute: typeof ModelsRoute
+  PortfolioRoute: typeof PortfolioRoute
   SandboxRoute: typeof SandboxRoute
+  TryTradeRoute: typeof TryTradeRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -306,6 +332,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ModelsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/portfolio': {
+      id: '/portfolio'
+      path: '/portfolio'
+      fullPath: '/portfolio'
+      preLoaderRoute: typeof PortfolioRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/portfolios': {
       id: '/portfolios'
       path: '/portfolios'
@@ -318,6 +351,13 @@ declare module '@tanstack/react-router' {
       path: '/sandbox'
       fullPath: '/sandbox'
       preLoaderRoute: typeof SandboxRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/try-trade': {
+      id: '/try-trade'
+      path: '/try-trade'
+      fullPath: '/try-trade'
+      preLoaderRoute: typeof TryTradeRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/agent/config': {
@@ -450,7 +490,9 @@ const rootRouteChildren: RootRouteChildren = {
   CredentialsRoute: CredentialsRoute,
   LogsRoute: LogsRoute,
   ModelsRoute: ModelsRoute,
+  PortfolioRoute: PortfolioRoute,
   SandboxRoute: SandboxRoute,
+  TryTradeRoute: TryTradeRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

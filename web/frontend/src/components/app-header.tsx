@@ -10,7 +10,6 @@ import {
   IconSun,
 } from "@tabler/icons-react"
 import * as React from "react"
-import { KhunquantLogo } from "@/components/khunquant-logo"
 import { useTranslation } from "react-i18next"
 
 import {
@@ -88,7 +87,15 @@ export function AppHeader() {
           <IconMenu2 />
         </SidebarTrigger>
         <div className="hidden shrink-0 items-center gap-2 sm:flex">
-          <KhunquantLogo size="lg" theme={theme} />
+          <div className="flex items-center gap-2 font-bold">
+            <span className="grid size-8 place-items-center rounded-lg bg-emerald-600 text-white">
+              ลท
+            </span>
+            <span>ลองเทรด</span>
+            <span className="rounded bg-amber-100 px-2 py-0.5 text-[10px] text-amber-800">
+              PAPER
+            </span>
+          </div>
         </div>
       </div>
 
