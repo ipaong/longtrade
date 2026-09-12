@@ -72,6 +72,9 @@ func (e *Engine) PrepareProposal(ctx context.Context, request OpenPositionReques
 	if err != nil {
 		return nil, err
 	}
+	if request.ClientRequestID == "" {
+		request.ClientRequestID = "proposal_preview"
+	}
 	request, err = ValidateOpenPositionRequest(request, quote)
 	if err != nil {
 		return nil, err

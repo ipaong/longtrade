@@ -119,7 +119,7 @@ func TestPaperTradeWorkflow(t *testing.T) {
 	_, mux, _, _, _ := setupPaperTestEnv(t)
 
 	// 1. Prepare trade proposal
-	prepareBody := `{"symbol": "XAUUSD", "side": "BUY", "volume_lots": 0.05, "stop_loss": 2390.0, "take_profit": 2420.0}`
+	prepareBody := `{"symbol": "XAUUSD", "side": "BUY", "volume_lots": 0.01, "stop_loss": 2390.0, "take_profit": 2420.0}`
 	prepReq := httptest.NewRequest(http.MethodPost, "/api/paper/trade/prepare", bytes.NewBufferString(prepareBody))
 	prepRec := httptest.NewRecorder()
 	mux.ServeHTTP(prepRec, prepReq)
@@ -161,8 +161,8 @@ func TestPaperTradeWorkflow(t *testing.T) {
 	if confResp.Position.ID == "" {
 		t.Fatalf("expected created position ID")
 	}
-	if confResp.Position.VolumeLots != 0.05 {
-		t.Errorf("position.VolumeLots = %f; want 0.05", confResp.Position.VolumeLots)
+	if confResp.Position.VolumeLots != 0.01 {
+		t.Errorf("position.VolumeLots = %f; want 0.01", confResp.Position.VolumeLots)
 	}
 
 	// 3. Confirm again with the same proposal ID should return 410 GONE (proposal consumed)
@@ -184,7 +184,7 @@ func TestPaperPositionProtectionAndClose(t *testing.T) {
 	pos, err := engine.OpenPosition(context.Background(), paper.OpenPositionRequest{
 		Symbol:          paper.SymbolXAUUSD,
 		Side:            paper.SideBuy,
-		VolumeLots:      0.10,
+		VolumeLots:      0.01,
 		StopLoss:        &sl,
 		TakeProfit:      &tp,
 		ClientRequestID: "pos_test_01",
@@ -242,7 +242,7 @@ func TestPaperEmergencyClose(t *testing.T) {
 	_, err := engine.OpenPosition(context.Background(), paper.OpenPositionRequest{
 		Symbol:          paper.SymbolXAUUSD,
 		Side:            paper.SideBuy,
-		VolumeLots:      0.02,
+		VolumeLots:      0.01,
 		ClientRequestID: "emg_1",
 	})
 	if err != nil {
@@ -251,7 +251,7 @@ func TestPaperEmergencyClose(t *testing.T) {
 	_, err = engine.OpenPosition(context.Background(), paper.OpenPositionRequest{
 		Symbol:          paper.SymbolXAUUSD,
 		Side:            paper.SideSell,
-		VolumeLots:      0.03,
+		VolumeLots:      0.01,
 		ClientRequestID: "emg_2",
 	})
 	if err != nil {
