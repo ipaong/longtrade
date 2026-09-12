@@ -61,6 +61,43 @@ func (e *Engine) currentQuote(ctx context.Context) (Quote, error) {
 	return quote, nil
 }
 
+// CurrentQuote returns the current validated quote for the paper engine.
+func (e *Engine) CurrentQuote(ctx context.Context) (Quote, error) {
+	return e.currentQuote(ctx)
+}
+
+// PrepareProposal validates a potential trade and creates a short-lived proposal.
+func (e *Engine) PrepareProposal(ctx context.Context, request OpenPositionRequest, ttl time.Duration) (*Proposal, error) {
+	quote, err := e.currentQuote(ctx)
+	if err != nil {
+		return nil, err
+	}
+	request, err = ValidateOpenPositionRequest(request, quote)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateLot(e.instrument, request.VolumeLots); err != nil {
+		return nil, err
+	}
+	price, err := quote.OpenPrice(request.Side)
+	if err != nil {
+		return nil, err
+	}
+	if ttl <= 0 {
+		ttl = 30 * time.Second
+	}
+	now := e.now().UTC()
+	return &Proposal{
+		ID:        "prop_" + uuid.NewString(),
+		Request:   request,
+		Quote:     quote,
+		OpenPrice: price,
+		CreatedAt: now,
+		ExpiresAt: now.Add(ttl),
+	}, nil
+}
+
+
 // OpenPosition validates risk and atomically creates one filled order and position.
 func (e *Engine) OpenPosition(ctx context.Context, request OpenPositionRequest) (*Position, error) {
 	quote, err := e.currentQuote(ctx)

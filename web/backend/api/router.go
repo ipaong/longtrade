@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/cryptoquantumwave/khunquant/pkg/config"
+	"github.com/cryptoquantumwave/khunquant/pkg/paper"
 	"github.com/cryptoquantumwave/khunquant/web/backend/launcherconfig"
 	"github.com/cryptoquantumwave/khunquant/web/backend/middleware"
 )
@@ -28,6 +29,11 @@ type Handler struct {
 	updateChecker              *updateChecker
 	sessions                   *middleware.SessionStore
 	dashboardPasswordHash      string
+	paperMu                    sync.Mutex
+	paperEngine                *paper.Engine
+	paperStore                 *paper.Store
+	paperQuotes                paper.QuoteSource
+	paperProposals             *proposalStore
 }
 
 // NewHandler creates an instance of the API handler.
@@ -139,4 +145,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	// Webull re-authentication (Connect button + status polling)
 	h.registerWebullRoutes(mux)
+
+	// LongTrade Paper Trading (Phase 2: LT-201 - LT-204)
+	h.registerPaperRoutes(mux)
 }
